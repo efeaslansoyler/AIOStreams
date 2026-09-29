@@ -187,6 +187,13 @@ export function useShellPlayer(opts: NativePlayerOptions): PlayerController {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fit]);
 
+  // Blu-ray and DVD subtitles keep their own size.
+  const imageSubtitle = React.useRef(false);
+  // Changes made during playback, from the player's menu or the settings, show at once.
+  React.useEffect(() => {
+    applySubtitleStyle(opts.subtitleStyle, imageSubtitle.current);
+  }, [opts.subtitleStyle]);
+
   React.useEffect(() => {
     const { volume, muted } = storedVolume();
     let cache = false;
@@ -194,15 +201,15 @@ export function useShellPlayer(opts: NativePlayerOptions): PlayerController {
 
     let fileTracks: MpvTrack[] = [];
     let sid: string | null = null;
-    let imageSubtitle = false;
+    imageSubtitle.current = false;
     const syncSubtitleScale = () => {
       const track = fileTracks.find(
         (t) => t.type === 'sub' && String(t.id) === sid
       );
       const image = IMAGE_SUBTITLE_CODECS.has(track?.codec ?? '');
       const style = latest.current.subtitleStyle;
-      if (image === imageSubtitle || !style) return;
-      imageSubtitle = image;
+      if (image === imageSubtitle.current || !style) return;
+      imageSubtitle.current = image;
       set('sub-scale', image ? 1 : subtitleScale(style));
     };
     // Shows an external subtitle in the user's language when their mode wants
@@ -419,9 +426,12 @@ function setProp(name: string, value: unknown) {
   window.aiostreamsDesktop?.send({ type: 'mpv-set-prop', name, value });
 }
 
-export function applySubtitleStyle(style: SubtitleStyle | undefined): void {
+export function applySubtitleStyle(
+  style: SubtitleStyle | undefined,
+  imageSubtitle = false
+): void {
   if (!style) return;
-  setProp('sub-scale', subtitleScale(style));
+  setProp('sub-scale', imageSubtitle ? 1 : subtitleScale(style));
   setProp('sub-pos', mpvSubtitlePosition(style));
   setProp('sub-bold', style.bold);
   setProp('sub-color', mpvColor(style.textColor));

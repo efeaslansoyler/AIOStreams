@@ -45,8 +45,12 @@ import type { PlayerController, PlayerState, Track } from '../lib/player';
 import { playbackHost } from '../lib/hosts';
 import { delayLabel } from '../lib/subtitle-lines';
 import {
+  SUBTITLE_POSITION_MAX,
+  SUBTITLE_SCALES,
   useSeekStep,
   useSegmentActions,
+  useSubtitlePosition,
+  useSubtitleScale,
   useVideoFit,
   type SegmentType,
   VIDEO_FITS,
@@ -399,6 +403,89 @@ function SubtitleSync({
           <LuUndo2 className="flex-none" />
           Reset
         </DropdownMenuItem>
+      )}
+    </>
+  );
+}
+
+/** A value stepped down or up without closing the menu. */
+function Stepper({
+  label,
+  value,
+  onDown,
+  onUp,
+  downLabel,
+  upLabel,
+}: {
+  label: string;
+  value: string;
+  onDown?: () => void;
+  onUp?: () => void;
+  downLabel: string;
+  upLabel: string;
+}) {
+  const keepOpen = (e: Event) => e.preventDefault();
+  return (
+    <>
+      <DropdownMenuLabel className="pt-3">{label}</DropdownMenuLabel>
+      <div className="flex items-center gap-1 px-1 pb-1">
+        <DropdownMenuItem
+          onSelect={keepOpen}
+          onClick={onDown}
+          disabled={!onDown}
+          className="justify-center"
+          aria-label={downLabel}
+        >
+          <LuMinus />
+        </DropdownMenuItem>
+        <span className="min-w-16 flex-1 text-center text-sm tabular-nums">
+          {value}
+        </span>
+        <DropdownMenuItem
+          onSelect={keepOpen}
+          onClick={onUp}
+          disabled={!onUp}
+          className="justify-center"
+          aria-label={upLabel}
+        >
+          <LuPlus />
+        </DropdownMenuItem>
+      </div>
+    </>
+  );
+}
+
+/** The subtitle size and height, saved as the settings and shown at once. */
+function SubtitleLook() {
+  const [scale, setScale] = useSubtitleScale();
+  const [position, setPosition] = useSubtitlePosition();
+  const i = SUBTITLE_SCALES.indexOf(scale as (typeof SUBTITLE_SCALES)[number]);
+  const smaller = SUBTITLE_SCALES[i - 1];
+  const larger = SUBTITLE_SCALES[i + 1];
+  return (
+    <>
+      <Stepper
+        label="Size"
+        value={`${scale}%`}
+        onDown={smaller ? () => setScale(smaller) : undefined}
+        onUp={larger ? () => setScale(larger) : undefined}
+        downLabel="Smaller subtitles"
+        upLabel="Larger subtitles"
+      />
+      {/* Only mpv can move subtitles. */}
+      {playbackHost() === 'shell' && (
+        <Stepper
+          label="Raise"
+          value={`${position}%`}
+          onDown={position > 0 ? () => setPosition(position - 1) : undefined}
+          onUp={
+            position < SUBTITLE_POSITION_MAX
+              ? () => setPosition(position + 1)
+              : undefined
+          }
+          downLabel="Lower subtitles"
+          upLabel="Raise subtitles"
+        />
       )}
     </>
   );
@@ -948,19 +1035,23 @@ export function PlayerControls({
                 onSelect={player.setSubtitle}
                 onOpenChange={onMenu}
                 footer={
-                  player.setSubtitleDelay &&
                   state.subtitle && (
-                    <SubtitleSync
-                      delayMs={state.subtitleDelayMs}
-                      onChange={player.setSubtitleDelay}
-                      onSyncByEar={() => setByEar(true)}
-                      onSyncToLine={
-                        player.subtitleLines &&
-                        (player.canReadSubtitle?.(state.subtitle) ?? true)
-                          ? pickLine
-                          : undefined
-                      }
-                    />
+                    <>
+                      {player.setSubtitleDelay && (
+                        <SubtitleSync
+                          delayMs={state.subtitleDelayMs}
+                          onChange={player.setSubtitleDelay}
+                          onSyncByEar={() => setByEar(true)}
+                          onSyncToLine={
+                            player.subtitleLines &&
+                            (player.canReadSubtitle?.(state.subtitle) ?? true)
+                              ? pickLine
+                              : undefined
+                          }
+                        />
+                      )}
+                      <SubtitleLook />
+                    </>
                   )
                 }
               />
