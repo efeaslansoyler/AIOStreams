@@ -17,6 +17,22 @@ export const MPV_OUTLINE: Record<SubtitleOutline, number> = {
 
 export const subtitleScale = (style: SubtitleStyle) => style.scale / 100;
 
+/** mpv's own subtitle font, used when none is picked. */
+export const mpvSubtitleFont = (style: SubtitleStyle) =>
+  style.font || 'sans-serif';
+
+/** The families of the fonts installed on this computer, sorted; empty where they can't be read. */
+export async function installedFonts(): Promise<string[]> {
+  const query = (
+    window as { queryLocalFonts?: () => Promise<{ family: string }[]> }
+  ).queryLocalFonts;
+  if (!query) return [];
+  const fonts = await query.call(window);
+  return [...new Set(fonts.map((f) => f.family))].sort((a, b) =>
+    a.localeCompare(b)
+  );
+}
+
 /** mpv's `sub-pos`: 100 is its usual place at the bottom, 0 the top. */
 export const mpvSubtitlePosition = (style: SubtitleStyle) =>
   100 - style.position;
@@ -32,10 +48,12 @@ export function subtitleCss(style: SubtitleStyle): {
   textShadow: string;
   fontSize: string;
   fontWeight: number;
+  fontFamily?: string;
 } {
   const px = OUTLINE_PX[style.outline];
   const c = style.outlineColor;
   return {
+    fontFamily: style.font ? `"${style.font}", sans-serif` : undefined,
     color: style.textColor,
     backgroundColor: rgba(style.backgroundColor, style.backgroundOpacity),
     textShadow: px

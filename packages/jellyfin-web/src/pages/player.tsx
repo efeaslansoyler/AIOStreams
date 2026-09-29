@@ -337,7 +337,7 @@ function cueCss(style: SubtitleStyle): string {
   const css = subtitleCss(style);
   return `video::cue {
     font-size: ${css.fontSize};
-    font-weight: ${css.fontWeight};
+    font-weight: ${css.fontWeight};${css.fontFamily ? `\n    font-family: ${css.fontFamily};` : ''}
     color: ${css.color};
     background-color: ${css.backgroundColor};
     text-shadow: ${css.textShadow};

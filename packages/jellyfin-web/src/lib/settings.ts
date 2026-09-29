@@ -437,6 +437,9 @@ export const SUBTITLE_SCALES = [
 export const SUBTITLE_POSITION_MAX = 50;
 const isSubtitlePosition = (value: number) =>
   value >= 0 && value <= SUBTITLE_POSITION_MAX;
+// Quotes would break out of the CSS the browser player writes.
+const isFontFamily = (value: string) =>
+  value.length <= 100 && !/["\\;{}<>]/.test(value);
 
 /** The percentages the old size presets stood for, read once to carry them over. */
 const LEGACY_SUBTITLE_SIZES: Record<string, number> = {
@@ -450,6 +453,7 @@ const SUBTITLE_KEYS = {
   legacySize: 'aiostreams-web-subtitle-size',
   scale: 'aiostreams-web-subtitle-scale',
   position: 'aiostreams-web-subtitle-position',
+  font: 'aiostreams-web-subtitle-font',
   bold: 'aiostreams-web-subtitle-bold',
   textColor: 'aiostreams-web-subtitle-text-color',
   outline: 'aiostreams-web-subtitle-outline',
@@ -473,6 +477,9 @@ export const useSubtitleScale = () =>
 /** How far above the bottom subtitles sit, as a percentage of the screen. */
 export const useSubtitlePosition = () =>
   useDeviceSetting<number>(SUBTITLE_KEYS.position, 0, isSubtitlePosition);
+/** An installed font's family name; empty for the player's own. */
+export const useSubtitleFont = () =>
+  useDeviceSetting<string>(SUBTITLE_KEYS.font, '', isFontFamily);
 export const useSubtitleBold = () =>
   useDeviceSetting<boolean>(SUBTITLE_KEYS.bold, false);
 export const useSubtitleTextColor = () =>
@@ -497,6 +504,8 @@ export interface SubtitleStyle {
   scale: number;
   /** Percentage of the screen above the bottom; 0 is mpv's default place. */
   position: number;
+  /** A font family, or empty for the player's own. */
+  font: string;
   bold: boolean;
   textColor: string;
   outline: SubtitleOutline;
@@ -510,6 +519,7 @@ export interface SubtitleStyle {
 export function useSubtitleStyle(): SubtitleStyle {
   const [scale] = useSubtitleScale();
   const [position] = useSubtitlePosition();
+  const [font] = useSubtitleFont();
   const [bold] = useSubtitleBold();
   const [textColor] = useSubtitleTextColor();
   const [outline] = useSubtitleOutline();
@@ -521,6 +531,7 @@ export function useSubtitleStyle(): SubtitleStyle {
     () => ({
       scale,
       position,
+      font,
       bold,
       textColor,
       outline,
@@ -532,6 +543,7 @@ export function useSubtitleStyle(): SubtitleStyle {
     [
       scale,
       position,
+      font,
       bold,
       textColor,
       outline,

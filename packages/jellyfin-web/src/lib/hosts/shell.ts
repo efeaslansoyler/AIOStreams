@@ -22,6 +22,7 @@ import {
 import {
   MPV_OUTLINE,
   mpvColor,
+  mpvSubtitleFont,
   mpvSubtitlePosition,
   subtitleScale,
 } from '../subtitle-style';
@@ -433,6 +434,7 @@ export function applySubtitleStyle(
   if (!style) return;
   setProp('sub-scale', imageSubtitle ? 1 : subtitleScale(style));
   setProp('sub-pos', mpvSubtitlePosition(style));
+  setProp('sub-font', mpvSubtitleFont(style));
   setProp('sub-bold', style.bold);
   setProp('sub-color', mpvColor(style.textColor));
   setProp('sub-outline-color', mpvColor(style.outlineColor));

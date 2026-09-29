@@ -57,7 +57,7 @@ import {
 } from '../lib/hosts/shell';
 import { LANGUAGES } from '../lib/languages';
 import { serverAddress } from '../lib/servers';
-import { subtitleCss } from '../lib/subtitle-style';
+import { installedFonts, subtitleCss } from '../lib/subtitle-style';
 import { usePlaybackPrefs, type SubtitleMode } from '../lib/user-config';
 import {
   externalAlways,
@@ -110,6 +110,7 @@ import {
   useSubtitleOutlineColor,
   useSubtitleOverrideStyled,
   useSubtitlePosition,
+  useSubtitleFont,
   useSubtitleScale,
   useSubtitleStyle,
   useSubtitleTextColor,
@@ -461,6 +462,39 @@ function AudioSection() {
   );
 }
 
+const DEFAULT_FONT = '__default__';
+
+/**
+ * The fonts installed on this computer, fonts added later included. Reading
+ * them can need a click the first time, so opening the list tries again.
+ */
+function SubtitleFontSelect() {
+  const [font, setFont] = useSubtitleFont();
+  const [fonts, setFonts] = React.useState<string[]>([]);
+  const load = React.useCallback(() => {
+    installedFonts()
+      .then((found) => found.length && setFonts(found))
+      .catch(() => {});
+  }, []);
+  React.useEffect(load, [load]);
+  if (!('queryLocalFonts' in window)) return null;
+  const families = font && !fonts.includes(font) ? [font, ...fonts] : fonts;
+  return (
+    <Select
+      label="Font"
+      help="Any font installed on this computer."
+      options={[
+        { value: DEFAULT_FONT, label: 'Default' },
+        ...families.map((f) => ({ value: f, label: f })),
+      ]}
+      position="popper"
+      value={font || DEFAULT_FONT}
+      onValueChange={(v) => setFont(v === DEFAULT_FONT ? '' : v)}
+      onOpenChange={(open) => open && !fonts.length && load()}
+    />
+  );
+}
+
 function SubtitlesSection() {
   const { prefs, update } = usePlaybackPrefs();
   const mode = prefs.SubtitleMode ?? 'Default';
@@ -523,6 +557,7 @@ function SubtitlesSection() {
           value={[position]}
           onValueChange={([v]) => setPosition(v)}
         />
+        <SubtitleFontSelect />
         <ColorInput
           label="Colour"
           value={textColor}

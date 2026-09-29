@@ -16,7 +16,10 @@ use tao::window::{Fullscreen, ResizeDirection, Window, WindowBuilder};
 #[cfg(windows)]
 use wry::WebViewBuilderExtWindows;
 use wry::http::{Request, Response};
-use wry::{NewWindowResponse, PageLoadEvent, Rect, WebContext, WebViewBuilder};
+use wry::{
+    NewWindowResponse, PageLoadEvent, PermissionKind, PermissionResponse, Rect, WebContext,
+    WebViewBuilder,
+};
 
 use crate::links::Inbox;
 use crate::placement::{self, MIN_SIZE, Placement, SETTLE};
@@ -194,6 +197,11 @@ pub fn run(app: App) {
         .with_transparent(true)
         .with_devtools(args.devtools)
         .with_initialization_script(bridge)
+        // The subtitle font setting lists the installed fonts without a prompt.
+        .with_permission_handler(|kind| match kind {
+            PermissionKind::LocalFonts => PermissionResponse::Allow,
+            _ => PermissionResponse::Default,
+        })
         .with_custom_protocol("aiostreams".into(), move |_, req: Request<Vec<u8>>| {
             let served = serve(web.as_deref(), req.uri().path());
             Response::builder()
