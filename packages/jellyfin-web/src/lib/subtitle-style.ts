@@ -1,11 +1,4 @@
-import type { SubtitleOutline, SubtitleSize, SubtitleStyle } from './settings';
-
-const SCALE: Record<SubtitleSize, number> = {
-  small: 0.8,
-  normal: 1,
-  large: 1.25,
-  huge: 1.5,
-};
+import type { SubtitleOutline, SubtitleStyle } from './settings';
 
 const OUTLINE_PX: Record<SubtitleOutline, number> = {
   none: 0,
@@ -22,7 +15,11 @@ export const MPV_OUTLINE: Record<SubtitleOutline, number> = {
   thick: 3,
 };
 
-export const subtitleScale = (style: SubtitleStyle) => SCALE[style.size];
+export const subtitleScale = (style: SubtitleStyle) => style.scale / 100;
+
+/** mpv's `sub-pos`: 100 is its usual place at the bottom, 0 the top. */
+export const mpvSubtitlePosition = (style: SubtitleStyle) =>
+  100 - style.position;
 
 function rgba(hex: string, opacity: number): string {
   const n = parseInt(hex.slice(1), 16);
@@ -44,7 +41,7 @@ export function subtitleCss(style: SubtitleStyle): {
     textShadow: px
       ? `${-px}px ${-px}px 0 ${c}, ${px}px ${-px}px 0 ${c}, ${-px}px ${px}px 0 ${c}, ${px}px ${px}px 0 ${c}`
       : 'none',
-    fontSize: `${SCALE[style.size] * 100}%`,
+    fontSize: `${style.scale}%`,
     fontWeight: style.bold ? 700 : 500,
   };
 }

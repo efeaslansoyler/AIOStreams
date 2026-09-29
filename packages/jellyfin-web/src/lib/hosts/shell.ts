@@ -19,7 +19,12 @@ import {
   savedSubtitleDelay,
   saveSubtitleDelay,
 } from '../subtitle-lines';
-import { MPV_OUTLINE, mpvColor, subtitleScale } from '../subtitle-style';
+import {
+  MPV_OUTLINE,
+  mpvColor,
+  mpvSubtitlePosition,
+  subtitleScale,
+} from '../subtitle-style';
 import {
   initialState,
   storedVolume,
@@ -417,6 +422,7 @@ function setProp(name: string, value: unknown) {
 export function applySubtitleStyle(style: SubtitleStyle | undefined): void {
   if (!style) return;
   setProp('sub-scale', subtitleScale(style));
+  setProp('sub-pos', mpvSubtitlePosition(style));
   setProp('sub-bold', style.bold);
   setProp('sub-color', mpvColor(style.textColor));
   setProp('sub-outline-color', mpvColor(style.outlineColor));

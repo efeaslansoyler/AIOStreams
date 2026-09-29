@@ -101,13 +101,16 @@ import {
   DISCORD_EVENTS,
   type DiscordEvent,
   useSkipVersionList,
+  SUBTITLE_POSITION_MAX,
+  SUBTITLE_SCALES,
   useSubtitleBackgroundColor,
   useSubtitleBold,
   useSubtitleBackgroundOpacity,
   useSubtitleOutline,
   useSubtitleOutlineColor,
   useSubtitleOverrideStyled,
-  useSubtitleSize,
+  useSubtitlePosition,
+  useSubtitleScale,
   useSubtitleStyle,
   useSubtitleTextColor,
   type AudioChannels,
@@ -119,7 +122,6 @@ import {
   type SegmentAction,
   type SegmentType,
   type SubtitleOutline,
-  type SubtitleSize,
 } from '../lib/settings';
 import { useFeature, useServerInfo } from '../lib/server-info';
 import { PageBody } from '../components/layout';
@@ -462,7 +464,8 @@ function AudioSection() {
 function SubtitlesSection() {
   const { prefs, update } = usePlaybackPrefs();
   const mode = prefs.SubtitleMode ?? 'Default';
-  const [size, setSize] = useSubtitleSize();
+  const [scale, setScale] = useSubtitleScale();
+  const [position, setPosition] = useSubtitlePosition();
   const [bold, setBold] = useSubtitleBold();
   const [textColor, setTextColor] = useSubtitleTextColor();
   const [outline, setOutline] = useSubtitleOutline();
@@ -492,7 +495,10 @@ function SubtitlesSection() {
         />
       </SettingsCard>
       <SettingsCard title="Preview">
-        <div className="flex aspect-[16/5] items-end justify-center rounded-lg bg-gradient-to-br from-gray-700 to-gray-950 p-4">
+        <div
+          className="flex aspect-[16/5] items-end justify-center rounded-lg bg-gradient-to-br from-gray-700 to-gray-950 p-4"
+          style={{ paddingBottom: `calc(1rem + ${position * 0.3}%)` }}
+        >
           <span className="rounded px-2 py-0.5 text-center text-lg" style={css}>
             This is how subtitles will look.
           </span>
@@ -501,14 +507,21 @@ function SubtitlesSection() {
       <SettingsCard title="Text" description={ON_DEVICE}>
         <Select
           label="Size"
-          options={[
-            { value: 'small', label: 'Small' },
-            { value: 'normal', label: 'Normal' },
-            { value: 'large', label: 'Large' },
-            { value: 'huge', label: 'Huge' },
-          ]}
-          value={size}
-          onValueChange={(v) => setSize(v as SubtitleSize)}
+          options={SUBTITLE_SCALES.map((v) => ({
+            value: String(v),
+            label: v === 100 ? '100% (Normal)' : `${v}%`,
+          }))}
+          value={String(scale)}
+          onValueChange={(v) => setScale(Number(v))}
+        />
+        <Slider
+          label={`Raise: ${position}%`}
+          help="Moves subtitles up from the bottom of the screen. Only in the desktop app."
+          min={0}
+          max={SUBTITLE_POSITION_MAX}
+          step={1}
+          value={[position]}
+          onValueChange={([v]) => setPosition(v)}
         />
         <ColorInput
           label="Colour"

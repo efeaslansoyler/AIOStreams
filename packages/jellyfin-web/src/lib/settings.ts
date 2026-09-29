@@ -424,16 +424,32 @@ export function useSegmentActions(): Record<SegmentType, SegmentAction> {
   }, [raw]);
 }
 
-export const SUBTITLE_SIZES = ['small', 'normal', 'large', 'huge'] as const;
-export type SubtitleSize = (typeof SUBTITLE_SIZES)[number];
 export const SUBTITLE_OUTLINES = ['none', 'thin', 'normal', 'thick'] as const;
 export type SubtitleOutline = (typeof SUBTITLE_OUTLINES)[number];
 
 const isHex = (value: string) => /^#[0-9a-f]{6}$/i.test(value);
 const isPercent = (value: number) => value >= 0 && value <= 100;
 
+/** Text sizes offered, as percentages of normal; includes the old presets. */
+export const SUBTITLE_SCALES = [
+  50, 60, 70, 75, 80, 85, 90, 95, 100, 110, 125, 150, 175, 200,
+] as const;
+export const SUBTITLE_POSITION_MAX = 50;
+const isSubtitlePosition = (value: number) =>
+  value >= 0 && value <= SUBTITLE_POSITION_MAX;
+
+/** The percentages the old size presets stood for, read once to carry them over. */
+const LEGACY_SUBTITLE_SIZES: Record<string, number> = {
+  small: 80,
+  normal: 100,
+  large: 125,
+  huge: 150,
+};
+
 const SUBTITLE_KEYS = {
-  size: 'aiostreams-web-subtitle-size',
+  legacySize: 'aiostreams-web-subtitle-size',
+  scale: 'aiostreams-web-subtitle-scale',
+  position: 'aiostreams-web-subtitle-position',
   bold: 'aiostreams-web-subtitle-bold',
   textColor: 'aiostreams-web-subtitle-text-color',
   outline: 'aiostreams-web-subtitle-outline',
@@ -443,8 +459,20 @@ const SUBTITLE_KEYS = {
   overrideStyled: 'aiostreams-web-subtitle-override-styled',
 } as const;
 
-export const useSubtitleSize = () =>
-  useDeviceSetting<SubtitleSize>(SUBTITLE_KEYS.size, 'normal', SUBTITLE_SIZES);
+const legacySubtitleScale = () =>
+  LEGACY_SUBTITLE_SIZES[storage.get<string>(SUBTITLE_KEYS.legacySize) ?? ''] ??
+  100;
+
+/** Text size as a percentage of normal; starts from the old preset if one was set. */
+export const useSubtitleScale = () =>
+  useDeviceSetting<number>(
+    SUBTITLE_KEYS.scale,
+    legacySubtitleScale(),
+    SUBTITLE_SCALES
+  );
+/** How far above the bottom subtitles sit, as a percentage of the screen. */
+export const useSubtitlePosition = () =>
+  useDeviceSetting<number>(SUBTITLE_KEYS.position, 0, isSubtitlePosition);
 export const useSubtitleBold = () =>
   useDeviceSetting<boolean>(SUBTITLE_KEYS.bold, false);
 export const useSubtitleTextColor = () =>
@@ -465,7 +493,10 @@ export const useSubtitleOverrideStyled = () =>
   useDeviceSetting<boolean>(SUBTITLE_KEYS.overrideStyled, false);
 
 export interface SubtitleStyle {
-  size: SubtitleSize;
+  /** Percentage of normal, one of SUBTITLE_SCALES. */
+  scale: number;
+  /** Percentage of the screen above the bottom; 0 is mpv's default place. */
+  position: number;
   bold: boolean;
   textColor: string;
   outline: SubtitleOutline;
@@ -477,7 +508,8 @@ export interface SubtitleStyle {
 }
 
 export function useSubtitleStyle(): SubtitleStyle {
-  const [size] = useSubtitleSize();
+  const [scale] = useSubtitleScale();
+  const [position] = useSubtitlePosition();
   const [bold] = useSubtitleBold();
   const [textColor] = useSubtitleTextColor();
   const [outline] = useSubtitleOutline();
@@ -487,7 +519,8 @@ export function useSubtitleStyle(): SubtitleStyle {
   const [overrideStyled] = useSubtitleOverrideStyled();
   return React.useMemo(
     () => ({
-      size,
+      scale,
+      position,
       bold,
       textColor,
       outline,
@@ -497,7 +530,8 @@ export function useSubtitleStyle(): SubtitleStyle {
       overrideStyled,
     }),
     [
-      size,
+      scale,
+      position,
       bold,
       textColor,
       outline,
