@@ -57,7 +57,11 @@ import {
 } from '../lib/hosts/shell';
 import { LANGUAGES } from '../lib/languages';
 import { serverAddress } from '../lib/servers';
-import { installedFonts, subtitleCss } from '../lib/subtitle-style';
+import {
+  installedFonts,
+  subtitleCss,
+  subtitleLine,
+} from '../lib/subtitle-style';
 import { usePlaybackPrefs, type SubtitleMode } from '../lib/user-config';
 import {
   externalAlways,
@@ -508,7 +512,8 @@ function SubtitlesSection() {
   const [backgroundOpacity, setBackgroundOpacity] =
     useSubtitleBackgroundOpacity();
   const [overrideStyled, setOverrideStyled] = useSubtitleOverrideStyled();
-  const css = subtitleCss(useSubtitleStyle());
+  const style = useSubtitleStyle();
+  const css = subtitleCss(style);
   return (
     <>
       <SettingsCard title="Language" description={ON_ACCOUNT}>
@@ -529,11 +534,11 @@ function SubtitlesSection() {
         />
       </SettingsCard>
       <SettingsCard title="Preview">
-        <div
-          className="flex aspect-[16/5] items-end justify-center rounded-lg bg-gradient-to-br from-gray-700 to-gray-950 p-4"
-          style={{ paddingBottom: `calc(1rem + ${position * 0.3}%)` }}
-        >
-          <span className="rounded px-2 py-0.5 text-center text-lg" style={css}>
+        <div className="relative aspect-[16/5] rounded-lg bg-gradient-to-br from-gray-700 to-gray-950">
+          <span
+            className="absolute left-1/2 w-max max-w-[90%] -translate-x-1/2 rounded px-2 py-0.5 text-center text-lg"
+            style={{ ...css, bottom: `${100 - subtitleLine(style)}%` }}
+          >
             This is how subtitles will look.
           </span>
         </div>
@@ -550,7 +555,7 @@ function SubtitlesSection() {
         />
         <Slider
           label={`Raise: ${position}%`}
-          help="Moves subtitles up from the bottom of the screen. Only in the desktop app."
+          help="How far subtitles sit above their usual place near the bottom."
           min={0}
           max={SUBTITLE_POSITION_MAX}
           step={1}
@@ -948,6 +953,8 @@ function InterfaceSection() {
 }
 
 const KEEP_CSS_MS = 15_000;
+const DOCS_URL = 'https://docs.aiostreams.viren070.me';
+const CSS_DOCS_URL = `${DOCS_URL}/reference/web-app-css`;
 
 function ThemeSection() {
   const [colors, setColors] = useThemeColors();
@@ -1052,6 +1059,16 @@ function ThemeSection() {
               <code>data-ui</code> attribute to style them by, such as{' '}
               <code>[data-ui=&quot;progress-bar&quot;]</code>. If it ever hides
               the page, add <code>?safe</code> to the address to turn it off.
+              See the{' '}
+              <a
+                href={CSS_DOCS_URL}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[--brand] hover:underline"
+              >
+                guide
+              </a>{' '}
+              for every selector and examples.
             </>
           )
         }
@@ -1179,9 +1196,22 @@ function AccountSection() {
   );
 }
 
+const REPO_URL = 'https://github.com/Viren070/AIOStreams';
 /** The desktop app's stable release, whose notes link each download. */
-const DESKTOP_DOWNLOAD_URL =
-  'https://github.com/Viren070/AIOStreams/releases/tag/desktop';
+const DESKTOP_DOWNLOAD_URL = `${REPO_URL}/releases/tag/desktop`;
+
+const LINKS = [
+  {
+    name: 'Source code',
+    help: 'Where the app is made, and where to report a problem.',
+    url: REPO_URL,
+  },
+  {
+    name: 'Documentation',
+    help: 'How to use the app and what each setting does.',
+    url: `${DOCS_URL}/guides/app`,
+  },
+];
 
 function AboutSection() {
   const { client } = useSession();
@@ -1240,6 +1270,17 @@ function AboutSection() {
             </Button>
           </SettingsRow>
         )}
+        {LINKS.map((link) => (
+          <SettingsRow key={link.name} label={link.name} help={link.help}>
+            <Button
+              intent="gray-outline"
+              className="w-full rounded-full sm:w-auto"
+              onClick={() => window.open(link.url, '_blank', 'noopener')}
+            >
+              Visit
+            </Button>
+          </SettingsRow>
+        ))}
       </SettingsCard>
       <SettingsCard title="Credits">
         {credits(shell).map((credit) => (
@@ -1373,7 +1414,7 @@ function sections(): Section[] {
     {
       id: 'about',
       label: 'About',
-      description: 'Versions',
+      description: 'Versions and links',
       icon: LuInfo,
       group: 'App',
       Content: AboutSection,

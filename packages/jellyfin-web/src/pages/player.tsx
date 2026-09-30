@@ -30,7 +30,7 @@ import { useFeature } from '../lib/server-info';
 import { useBrowserPlayer, usePhoneFullscreen } from '../lib/hosts/browser';
 import { useDesktopPlayer } from '../lib/hosts/jellyfin-desktop';
 import { useShellPlayer } from '../lib/hosts/shell';
-import { useDiscordPresence } from '../lib/discord';
+import { useNowPlaying } from '../lib/now-playing';
 import type { PlayerController } from '../lib/player';
 import {
   useChapterSkips,
@@ -39,7 +39,7 @@ import {
   type SubtitleStyle,
   type VideoFit,
 } from '../lib/settings';
-import { subtitleCss } from '../lib/subtitle-style';
+import { subtitleCss, subtitleScale } from '../lib/subtitle-style';
 import { usePlaybackPrefs, type PlaybackPrefs } from '../lib/user-config';
 import { backdropUrl } from '../lib/images';
 import { goBack, navigate, to, versionsPath } from '../lib/paths';
@@ -333,10 +333,11 @@ function Failure({
   );
 }
 
+/** Sized from the video's height, as a cue is by default; Firefox reads a percentage against the page font. */
 function cueCss(style: SubtitleStyle): string {
   const css = subtitleCss(style);
   return `video::cue {
-    font-size: ${css.fontSize};
+    font-size: calc(${subtitleScale(style)} * 5vh);
     font-weight: ${css.fontWeight};${css.fontFamily ? `\n    font-family: ${css.fontFamily};` : ''}
     color: ${css.color};
     background-color: ${css.backgroundColor};
@@ -361,6 +362,7 @@ function BrowserPlayer({
     startMs,
     onEnded,
     prefs,
+    subtitleStyle,
   });
   const segments = useSegments(item.Id!);
   const next = useNextEpisodePrompt({
@@ -372,6 +374,11 @@ function BrowserPlayer({
   connect(next);
   const switchVersion = useSwitchVersion(item, source, player);
   useReporting(player, { item, source, playSessionId });
+  useNowPlaying(item, player, {
+    onStop: back,
+    onNext: next.next ? next.playNext : undefined,
+    onPrevious: next.previous ? next.playPrevious : undefined,
+  });
 
   return (
     <div data-page="player" className="fixed inset-0 bg-black">
@@ -479,7 +486,11 @@ function NativePlayer({
   connect(next);
   const switchVersion = useSwitchVersion(item, source, player);
   useReporting(player, { item, source, playSessionId });
-  useDiscordPresence(item, player.state);
+  useNowPlaying(item, player, {
+    onStop: back,
+    onNext: next.next ? next.playNext : undefined,
+    onPrevious: next.previous ? next.playPrevious : undefined,
+  });
 
   return (
     <div data-page="player" className="fixed inset-0">

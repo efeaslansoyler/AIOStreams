@@ -9,6 +9,7 @@ import {
   saveSubtitleDelay,
 } from '../subtitle-lines';
 import type { MediaStream } from '../types';
+import { subtitleLine } from '../subtitle-style';
 import {
   initialState,
   storedVolume,
@@ -110,6 +111,23 @@ export function useBrowserPlayer(
       shifted.current.set(track, delayMs.current);
     }
   }, [video]);
+  // Browsers disagree on where a cue the file leaves unplaced goes.
+  const placed = React.useRef(new WeakSet<VTTCue>());
+  const line = subtitleLine(opts.subtitleStyle);
+  const placeCues = React.useCallback(() => {
+    for (const track of Array.from(video.current?.textTracks ?? [])) {
+      for (const cue of Array.from(track.cues ?? [])) {
+        const vtt = cue as VTTCue;
+        if (vtt.line !== 'auto' && !placed.current.has(vtt)) continue;
+        placed.current.add(vtt);
+        vtt.snapToLines = false;
+        vtt.line = line;
+        vtt.lineAlign = 'end';
+      }
+    }
+  }, [video, line]);
+  React.useEffect(placeCues, [placeCues]);
+  const latestPlaceCues = useLatest(placeCues);
   const showSubtitle = (id: string | null) => {
     const tracks = video.current?.textTracks;
     if (!tracks) return;
@@ -165,7 +183,11 @@ export function useBrowserPlayer(
     for (const [event, handler] of Object.entries(handlers))
       el.addEventListener(event, handler);
     const trackElements = Array.from(el.querySelectorAll('track'));
-    for (const t of trackElements) t.addEventListener('load', shiftCues);
+    const onTrackLoad = () => {
+      latestPlaceCues.current();
+      shiftCues();
+    };
+    for (const t of trackElements) t.addEventListener('load', onTrackLoad);
     const onFullscreen = () =>
       patch({ fullscreen: !!document.fullscreenElement });
     document.addEventListener('fullscreenchange', onFullscreen);
@@ -173,9 +195,20 @@ export function useBrowserPlayer(
       for (const [event, handler] of Object.entries(handlers))
         el.removeEventListener(event, handler);
       document.removeEventListener('fullscreenchange', onFullscreen);
-      for (const t of trackElements) t.removeEventListener('load', shiftCues);
+      for (const t of trackElements) t.removeEventListener('load', onTrackLoad);
     };
   }, [video, startMs, onEnded]);
+
+  // Browsers keep a closed player in their media controls until its video drops the stream.
+  React.useEffect(() => {
+    const el = video.current;
+    return () => {
+      if (!el) return;
+      el.pause();
+      el.removeAttribute('src');
+      el.load();
+    };
+  }, [video]);
 
   const el = () => video.current;
   return {

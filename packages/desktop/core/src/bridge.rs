@@ -6,6 +6,7 @@ use serde_json::Value;
 
 use crate::discord::Presence;
 use crate::mpv::Kind;
+use crate::now_playing::{self, MediaKey};
 
 /// Bumped when a message changes shape, so pages can tell shells apart.
 pub const PROTOCOL_VERSION: u32 = 1;
@@ -71,6 +72,10 @@ pub enum Inbound {
     },
     /// Connects to Discord if need be and answers with a `discord-status`.
     DiscordCheck,
+    /// The title the player shows; `None` once it closes.
+    NowPlaying {
+        item: Option<now_playing::Item>,
+    },
     /// The page can take `link` messages, and any that arrived before it loaded.
     LinksReady,
 }
@@ -121,6 +126,9 @@ pub enum Outbound {
     Link {
         url: String,
     },
+    MediaKey {
+        key: MediaKey,
+    },
     Error {
         message: String,
     },
@@ -141,6 +149,7 @@ pub const OBSERVED: &[(&str, Kind)] = &[
     ("seeking", Kind::Flag),
     ("idle-active", Kind::Flag),
     ("volume", Kind::Double),
+    ("volume-max", Kind::Double),
     ("mute", Kind::Flag),
     ("speed", Kind::Double),
     ("aid", Kind::String),

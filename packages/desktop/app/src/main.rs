@@ -2,6 +2,7 @@
 
 mod links;
 mod logging;
+mod media;
 mod placement;
 mod platform;
 mod shell;
@@ -10,11 +11,11 @@ mod updates;
 use std::cell::RefCell;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use aiostreams_desktop_core::bridge::{Inbound, Outbound, PROTOCOL_VERSION, origin};
-use aiostreams_desktop_core::discord;
 use aiostreams_desktop_core::player::Player;
+use aiostreams_desktop_core::{discord, now_playing};
 use updates::{Command, Updater};
 
 #[derive(Debug)]
@@ -233,6 +234,8 @@ fn main() {
             .on_before_uninstall_fast_callback(|_| platform::unregister_links());
     }
     velopack.run();
+    #[cfg(windows)]
+    platform::claim_app_id();
     let (config_dir, data_dir) = match portable_root() {
         Some(root) => (root.join("data"), root.join("data")),
         None => (app_dir(dirs::config_dir()), app_dir(dirs::data_local_dir())),
@@ -337,8 +340,50 @@ pub fn start_player(
         library.display(),
         mpv_dir.display()
     );
+    let awake = Mutex::new(Awake::default());
+    let emit = move |message: Outbound| {
+        if let Outbound::MpvProp { name, data } = &message
+            && let Ok(mut awake) = awake.lock()
+        {
+            awake.update(name, data);
+        }
+        now_playing::observe(&message);
+        emit(message)
+    };
     Player::start(library, &defaults, &required, Arc::new(emit))
         .unwrap_or_else(|e| platform::fatal(&format!("mpv failed to start: {e}")))
+}
+
+/// Keeps the display on while a file plays.
+struct Awake {
+    paused: bool,
+    idle: bool,
+    on: bool,
+}
+
+impl Default for Awake {
+    fn default() -> Self {
+        Self {
+            paused: false,
+            idle: true,
+            on: false,
+        }
+    }
+}
+
+impl Awake {
+    fn update(&mut self, name: &str, data: &serde_json::Value) {
+        match name {
+            "pause" => self.paused = data == true,
+            "idle-active" => self.idle = data == true,
+            _ => return,
+        }
+        let on = !self.paused && !self.idle;
+        if on != self.on {
+            self.on = on;
+            platform::keep_awake(on);
+        }
+    }
 }
 
 pub fn handle(
@@ -422,7 +467,8 @@ pub fn handle(
                 updater.send(Command::Apply);
             }
         }
-        Inbound::Presence { presence } => discord::set(presence),
+        Inbound::Presence { presence } => now_playing::browsing(presence),
+        Inbound::NowPlaying { item } => now_playing::set_item(item),
         Inbound::DiscordCheck => discord::check(),
         Inbound::LinksReady => send(UserEvent::LinksReady),
         Inbound::WebError { message } => {
