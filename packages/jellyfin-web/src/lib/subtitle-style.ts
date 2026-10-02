@@ -7,19 +7,9 @@ import {
   type SubtitleStyle,
 } from './settings';
 
-const SCALE: Record<SubtitleSize, number> = {
-  small: 0.8,
-  normal: 1,
-  large: 1.25,
-  huge: 1.5,
-};
-
-export const SUBTITLE_SIZE_LABELS: Record<SubtitleSize, string> = {
-  small: 'Small',
-  normal: 'Normal',
-  large: 'Large',
-  huge: 'Huge',
-};
+export const SUBTITLE_SIZE_LABELS = Object.fromEntries(
+  SUBTITLE_SIZES.map((size) => [size, `${size}%`])
+) as Record<SubtitleSize, string>;
 
 /** One size up or down; null at either end. */
 export function stepSubtitleSize(sign: number): SubtitleSize | null {
@@ -59,7 +49,7 @@ export const MPV_OUTLINE: Record<SubtitleOutline, number> = {
   thick: 3,
 };
 
-export const subtitleScale = (style: SubtitleStyle) => SCALE[style.size];
+export const subtitleScale = (style: SubtitleStyle) => style.size / 100;
 
 /** Percent from the top where an unplaced subtitle's bottom sits, as mpv places it. */
 export const subtitleLine = (style?: SubtitleStyle) =>
@@ -76,16 +66,18 @@ export function subtitleCss(style: SubtitleStyle): {
   textShadow: string;
   fontSize: string;
   fontWeight: number;
+  fontFamily?: string;
 } {
   const px = OUTLINE_PX[style.outline];
   const c = style.outlineColor;
   return {
+    fontFamily: style.font ? `"${style.font}", sans-serif` : undefined,
     color: style.textColor,
     backgroundColor: rgba(style.backgroundColor, style.backgroundOpacity),
     textShadow: px
       ? `${-px}px ${-px}px 0 ${c}, ${px}px ${-px}px 0 ${c}, ${-px}px ${px}px 0 ${c}, ${px}px ${px}px 0 ${c}`
       : 'none',
-    fontSize: `${SCALE[style.size] * 100}%`,
+    fontSize: `${style.size}%`,
     fontWeight: style.bold ? 700 : 500,
   };
 }

@@ -48,6 +48,7 @@ import {
   openMpvConfig,
   requestDiagnostics,
   useShellInfo,
+  useShellFonts,
   applyUpdate,
   checkForUpdates,
   useUpdateState,
@@ -450,6 +451,31 @@ function AudioSection() {
   );
 }
 
+const DEFAULT_FONT = '__default__';
+
+/** The fonts installed on this computer, read again each time the list opens. */
+function SubtitleFontSelect() {
+  const [font, setFont] = useSetting(settings.subtitle.font);
+  const { fonts, load } = useShellFonts();
+  React.useEffect(load, [load]);
+  if (!fonts) return null;
+  const families = font && !fonts.includes(font) ? [font, ...fonts] : fonts;
+  return (
+    <Select
+      label="Font"
+      help="Any font installed on this computer."
+      options={[
+        { value: DEFAULT_FONT, label: 'Default' },
+        ...families.map((f) => ({ value: f, label: f })),
+      ]}
+      position="popper"
+      value={font || DEFAULT_FONT}
+      onValueChange={(v) => setFont(v === DEFAULT_FONT ? '' : v)}
+      onOpenChange={(open) => open && load()}
+    />
+  );
+}
+
 function SubtitlesSection() {
   const { prefs, update } = usePlaybackPrefs();
   const mode = prefs.SubtitleMode ?? 'Default';
@@ -505,12 +531,13 @@ function SubtitlesSection() {
         <Select
           label="Size"
           options={SUBTITLE_SIZES.map((value) => ({
-            value,
+            value: String(value),
             label: SUBTITLE_SIZE_LABELS[value],
           }))}
-          value={size}
-          onValueChange={(v) => setSize(v as SubtitleSize)}
+          value={String(size)}
+          onValueChange={(v) => setSize(Number(v) as SubtitleSize)}
         />
+        <SubtitleFontSelect />
         <ColorInput
           label="Colour"
           value={textColor}

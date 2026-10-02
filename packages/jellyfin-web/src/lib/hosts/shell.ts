@@ -60,6 +60,7 @@ export type ShellMessage =
     }
   | { type: 'link'; url: string }
   | { type: 'media-key'; key: MediaKey }
+  | { type: 'fonts'; families: string[] }
   | { type: 'error'; message: string };
 
 /** A press on the system's media controls; positions and offsets are milliseconds. */
@@ -451,6 +452,7 @@ function applySubtitleStyle(
   );
   setProp('sub-ass-override', style.overrideStyled ? 'force' : 'scale');
   setProp('sub-pos', 100 - style.position);
+  setProp('sub-font', style.font || 'sans-serif');
 }
 
 function applyDesktopSettings(): void {
@@ -579,6 +581,21 @@ export function useShellInfo(): ShellInfo | null {
     return unsubscribe;
   }, []);
   return info;
+}
+
+/** The font families installed, asked for again each time `load` runs; null without the app. */
+export function useShellFonts(): { fonts: string[] | null; load(): void } {
+  const shell = window.aiostreamsDesktop;
+  const [fonts, setFonts] = React.useState<string[] | null>(shell ? [] : null);
+  React.useEffect(
+    () =>
+      shell?.subscribe((m) => {
+        if (m.type === 'fonts') setFonts(m.families);
+      }),
+    [shell]
+  );
+  const load = React.useCallback(() => shell?.send({ type: 'fonts' }), [shell]);
+  return { fonts, load };
 }
 
 /** The `aiostreams://` links the app is opened with, including the one that started it. */

@@ -285,6 +285,25 @@ pub fn receive_script(message: &Outbound) -> String {
     format!("window.__aiostreamsDesktopReceive?.({})", message.to_json())
 }
 
+/// The families fontconfig knows, by their first (English) name.
+fn installed_fonts() -> Vec<String> {
+    let Ok(out) = std::process::Command::new("fc-list")
+        .args([":", "family"])
+        .output()
+    else {
+        return Vec::new();
+    };
+    let mut families: Vec<String> = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter_map(|line| line.split(',').next())
+        .map(|family| family.trim().replace('\\', ""))
+        .filter(|family| !family.is_empty())
+        .collect();
+    families.sort_by_key(|family| family.to_lowercase());
+    families.dedup();
+    families
+}
+
 fn mpv_config_dir(config_dir: &Path) -> PathBuf {
     let dir = config_dir.join("mpv");
     let _ = std::fs::create_dir_all(&dir);
@@ -435,6 +454,9 @@ pub fn handle(
             };
             send(UserEvent::Emit(receive_script(&info)));
         }
+        Inbound::Fonts => send(UserEvent::Emit(receive_script(&Outbound::Fonts {
+            families: installed_fonts(),
+        }))),
         Inbound::OpenMpvConfig => platform::open_external(&paths.mpv.to_string_lossy()),
         Inbound::OpenLogs => platform::open_external(&paths.logs.to_string_lossy()),
         Inbound::Diagnostics { web, server } => {

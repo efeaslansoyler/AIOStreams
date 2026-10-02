@@ -320,11 +320,14 @@ export type SegmentType = (typeof SEGMENT_TYPES)[number];
 export const SEGMENT_ACTIONS = ['ask', 'skip', 'none'] as const;
 export type SegmentAction = (typeof SEGMENT_ACTIONS)[number];
 
-export const SUBTITLE_SIZES = ['small', 'normal', 'large', 'huge'] as const;
+/** Text sizes, as percentages of normal. */
+export const SUBTITLE_SIZES = [
+  50, 60, 70, 75, 80, 85, 90, 95, 100, 110, 125, 150, 175, 200,
+] as const;
 export type SubtitleSize = (typeof SUBTITLE_SIZES)[number];
 export const SUBTITLE_OUTLINES = ['none', 'thin', 'normal', 'thick'] as const;
 export type SubtitleOutline = (typeof SUBTITLE_OUTLINES)[number];
-export const SUBTITLE_POSITION_MAX = 30;
+export const SUBTITLE_POSITION_MAX = 50;
 
 export interface SubtitleStyle {
   size: SubtitleSize;
@@ -338,6 +341,8 @@ export interface SubtitleStyle {
   overrideStyled: boolean;
   /** Percent of the height to raise subtitles by. */
   position: number;
+  /** An installed font's family; empty for the player's own. */
+  font: string;
 }
 
 const isHex = (value: string) => /^#[0-9a-f]{6}$/i.test(value);
@@ -369,8 +374,8 @@ export const NEXT_COUNTDOWNS = [5, 10, 15, 30] as const;
 
 const subtitle = {
   size: device<SubtitleSize>(
-    'aiostreams-web-subtitle-size',
-    'normal',
+    'aiostreams-web-subtitle-scale',
+    100,
     SUBTITLE_SIZES
   ),
   bold: device<boolean>('aiostreams-web-subtitle-bold', false),
@@ -407,6 +412,12 @@ const subtitle = {
     'aiostreams-web-subtitle-position',
     0,
     (v) => v >= 0 && v <= SUBTITLE_POSITION_MAX
+  ),
+  // Quotes would break out of the CSS the browser player writes.
+  font: device<string>(
+    'aiostreams-web-subtitle-font',
+    '',
+    (v) => v.length <= 100 && !/["\\;{}<>]/.test(v)
   ),
 };
 

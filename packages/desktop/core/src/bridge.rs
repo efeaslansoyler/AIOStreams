@@ -78,6 +78,8 @@ pub enum Inbound {
     },
     /// The page can take `link` messages, and any that arrived before it loaded.
     LinksReady,
+    /// Asks for a `fonts` answer: the font families installed, for subtitles.
+    Fonts,
 }
 
 #[derive(Debug, Serialize)]
@@ -128,6 +130,10 @@ pub enum Outbound {
     },
     MediaKey {
         key: MediaKey,
+    },
+    /// Sorted family names; empty where fontconfig is missing.
+    Fonts {
+        families: Vec<String>,
     },
     Error {
         message: String,
