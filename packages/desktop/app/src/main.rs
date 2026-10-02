@@ -182,6 +182,8 @@ pub fn allowed_navigation(url: &str, app_origin: &str) -> bool {
 /// Where the app keeps its files, and the day's log.
 pub struct Paths {
     mpv: PathBuf,
+    /// Colours the desktop's theme writes, which the page uses unless the user picked its own.
+    theme: PathBuf,
     logs: PathBuf,
     log_file: PathBuf,
 }
@@ -267,6 +269,7 @@ fn main() {
         origin(&start_url).unwrap_or_else(|| platform::fatal("--web: not a valid address"));
     let paths = Rc::new(Paths {
         mpv: mpv_config_dir(&config_dir),
+        theme: config_dir.join("theme.json"),
         logs,
         log_file,
     });
@@ -302,6 +305,25 @@ fn installed_fonts() -> Vec<String> {
     families.sort_by_key(|family| family.to_lowercase());
     families.dedup();
     families
+}
+
+/// `{"accent": "#rrggbb", "background": "#rrggbb"}`; anything else counts as unset.
+pub fn system_theme(path: &Path) -> Outbound {
+    let json: serde_json::Value = std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or_default();
+    let color = |key: &str| {
+        json.get(key)
+            .and_then(|v| v.as_str())
+            .filter(|v| v.len() == 7 && v.starts_with('#'))
+            .filter(|v| v[1..].chars().all(|c| c.is_ascii_hexdigit()))
+            .map(str::to_owned)
+    };
+    Outbound::SystemTheme {
+        accent: color("accent"),
+        background: color("background"),
+    }
 }
 
 fn mpv_config_dir(config_dir: &Path) -> PathBuf {
@@ -457,6 +479,9 @@ pub fn handle(
         Inbound::Fonts => send(UserEvent::Emit(receive_script(&Outbound::Fonts {
             families: installed_fonts(),
         }))),
+        Inbound::SystemTheme => send(UserEvent::Emit(receive_script(&system_theme(
+            &paths.theme,
+        )))),
         Inbound::OpenMpvConfig => platform::open_external(&paths.mpv.to_string_lossy()),
         Inbound::OpenLogs => platform::open_external(&paths.logs.to_string_lossy()),
         Inbound::Diagnostics { web, server } => {

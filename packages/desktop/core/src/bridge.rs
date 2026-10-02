@@ -80,6 +80,8 @@ pub enum Inbound {
     LinksReady,
     /// Asks for a `fonts` answer: the font families installed, for subtitles.
     Fonts,
+    /// Asks for a `system-theme` answer, which comes again whenever it changes.
+    SystemTheme,
 }
 
 #[derive(Debug, Serialize)]
@@ -134,6 +136,11 @@ pub enum Outbound {
     /// Sorted family names; empty where fontconfig is missing.
     Fonts {
         families: Vec<String>,
+    },
+    /// Colours from `theme.json` in the config folder, `#rrggbb`; `None` where unset.
+    SystemTheme {
+        accent: Option<String>,
+        background: Option<String>,
     },
     Error {
         message: String,

@@ -18,7 +18,7 @@ use crate::placement::{self, MIN_SIZE, Placement, SETTLE};
 use crate::updates::Updater;
 use crate::{
     App, Edge, Served, UserEvent, allowed_navigation, handle, platform, receive_script, serve,
-    start_player,
+    start_player, system_theme,
 };
 
 /// The bridge posts through `window.ipc`, as wry names it on the other platforms.
@@ -420,8 +420,23 @@ pub fn run(app: App) {
         post(UserEvent::Link(link));
     }
     platform::listen_links(&data_dir, |link| post(UserEvent::Link(link)));
+    // The desktop's theme rewrites the file when the colours change; the page follows at once.
+    let theme_monitor = gio::File::for_path(&paths.theme)
+        .monitor_file(gio::FileMonitorFlags::WATCH_MOVES, gio::Cancellable::NONE)
+        .inspect_err(|e| log::warn!("theme.json: not watched: {e}"))
+        .ok();
+    if let Some(monitor) = &theme_monitor {
+        let path = paths.theme.clone();
+        monitor.connect_changed(move |_, _, _, event| {
+            use gio::FileMonitorEvent::*;
+            if matches!(event, ChangesDoneHint | Created | Deleted | MovedIn | Renamed) {
+                post(UserEvent::Emit(receive_script(&system_theme(&path))));
+            }
+        });
+    }
     window.present();
     webview.load_uri(&start_url);
     main_loop.run();
+    drop(theme_monitor);
     SHELL.with(|s| s.borrow_mut().take());
 }

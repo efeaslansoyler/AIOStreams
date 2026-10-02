@@ -61,6 +61,7 @@ export type ShellMessage =
   | { type: 'link'; url: string }
   | { type: 'media-key'; key: MediaKey }
   | { type: 'fonts'; families: string[] }
+  | { type: 'system-theme'; accent: string | null; background: string | null }
   | { type: 'error'; message: string };
 
 /** A press on the system's media controls; positions and offsets are milliseconds. */
@@ -596,6 +597,33 @@ export function useShellFonts(): { fonts: string[] | null; load(): void } {
   );
   const load = React.useCallback(() => shell?.send({ type: 'fonts' }), [shell]);
   return { fonts, load };
+}
+
+/** The desktop's theme colours, kept current; null without the app or a theme. */
+export function useSystemTheme(): {
+  accent?: string;
+  background?: string;
+} | null {
+  const [theme, setTheme] = React.useState<{
+    accent?: string;
+    background?: string;
+  } | null>(null);
+  React.useEffect(() => {
+    const shell = window.aiostreamsDesktop;
+    if (!shell) return;
+    const unsubscribe = shell.subscribe((m) => {
+      if (m.type !== 'system-theme') return;
+      const { accent, background } = m;
+      setTheme(
+        accent || background
+          ? { accent: accent ?? undefined, background: background ?? undefined }
+          : null
+      );
+    });
+    shell.send({ type: 'system-theme' });
+    return unsubscribe;
+  }, []);
+  return theme;
 }
 
 /** The `aiostreams://` links the app is opened with, including the one that started it. */
