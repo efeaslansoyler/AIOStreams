@@ -6,7 +6,6 @@ import { ThemeProvider } from 'next-themes';
 import { Toaster } from '@aiostreams/ui/toaster';
 import { LoadingOverlay } from '@aiostreams/ui/loading-spinner';
 import { pickerAccount, SessionProvider, useSessionPhase } from './lib/session';
-import { announceToAndroid } from './lib/hosts/jellyfin-android';
 import { webRouter } from './router';
 import { SignInScreen, Unreachable, UserPicker } from './pages/sign-in';
 import { PageBackground } from './components/layout';
@@ -25,7 +24,7 @@ import {
   type SavedServer,
 } from './lib/servers';
 import { ServersPage } from './pages/servers';
-import { playbackHost, type PlaybackHost } from './lib/hosts';
+import { currentHost } from './lib/hosts';
 import { ShellSetup, useShellLinks } from './lib/hosts/shell';
 import { parseAppLink } from './lib/app-links';
 import { toast } from 'sonner';
@@ -35,21 +34,14 @@ import {
 } from '@aiostreams/ui/shared/confirmation-dialog';
 import { ThemeStyles } from './components/theme-styles';
 import { WindowControls } from './components/window-controls';
-
-/** Custom CSS matches these, so they can't change. */
-const HOST_NAMES: Record<PlaybackHost, string> = {
-  browser: 'browser',
-  shell: 'desktop',
-  desktop: 'jellyfin-desktop',
-  android: 'android',
-};
+import { InputSetup } from './components/input-setup';
 
 /** The web app served at the Jellyfin API's `/web`. */
 export default function JellyfinWebApp() {
   React.useEffect(() => {
     const html = document.documentElement;
     document.body.classList.add('jellyfin-web');
-    html.dataset.host = HOST_NAMES[playbackHost()];
+    html.dataset.host = currentHost().name;
     return () => {
       document.body.classList.remove('jellyfin-web');
       delete html.dataset.host;
@@ -66,7 +58,8 @@ export default function JellyfinWebApp() {
         />
         <PageBackground />
         <ThemeStyles />
-        {playbackHost() === 'shell' && (
+        <InputSetup router={webRouter} />
+        {currentHost().name === 'desktop' && (
           <>
             <ShellSetup />
             <WindowControls />
@@ -165,15 +158,16 @@ function Standalone() {
 
 function Session({
   base,
-  changeServer,
+  changeServer: leave,
 }: {
   base: string;
   changeServer?: () => void;
 }) {
   const { phase, signIn, signInWithQuickConnect, switchUser, signOut, retry } =
     useSessionPhase(base);
+  const changeServer = leave ?? currentHost().selectServer;
 
-  React.useEffect(() => announceToAndroid(base), [base]);
+  React.useEffect(() => currentHost().start?.({ base }), [base]);
 
   const ready = phase.kind === 'ready' ? phase : null;
   const anonymous = React.useMemo(() => new JellyfinClient(base), [base]);
@@ -190,11 +184,8 @@ function Session({
   React.useEffect(() => {
     document.title = info.name || 'AIOStreams';
   }, [info.name]);
-  // The Android app reads the stored sign-in when this is requested.
   React.useEffect(() => {
-    if (ready && window.NativeInterface) {
-      void ready.client.post('/Sessions/Capabilities/Full', {}).catch(() => {});
-    }
+    if (ready) currentHost().signedIn?.(ready.client);
   }, [ready]);
 
   let screen: React.ReactNode;

@@ -16,7 +16,7 @@ import {
   unavailableLabel,
   untilLabel,
 } from '../lib/format';
-import { Artwork, ProgressBar } from './cards';
+import { Artwork, OpenedPulse, ProgressBar } from './cards';
 import { OverviewInfo } from './overview';
 import { ItemMenu } from './item-menu';
 import { useVersionPicker } from './version-picker';
@@ -109,14 +109,12 @@ function Thumb({
   highlighted,
   className,
   numberClass,
-  maxWidth,
 }: {
   episode: BaseItemDto;
   playable: boolean;
   highlighted?: boolean;
   className?: string;
   numberClass: string;
-  maxWidth: number;
 }) {
   const { client } = useSession();
   const unavailable = unavailableLabel(episode);
@@ -130,7 +128,7 @@ function Thumb({
       )}
     >
       <Artwork
-        src={landscapeUrls(client, episode, { maxWidth })}
+        src={(width) => landscapeUrls(client, episode, { maxWidth: width })}
         alt={seasonEpisodeTitle(episode)}
         own={ownImages(episode)}
         standIn={<EpisodeNumber episode={episode} className={numberClass} />}
@@ -155,10 +153,7 @@ function Thumb({
         </div>
       )}
       {progress != null && progress > 0 && <ProgressBar percent={progress} />}
-      {/* Drawn inside, since a row clips anything outside it. */}
-      {highlighted && (
-        <span className="pointer-events-none absolute inset-0 rounded-[inherit] ring-2 ring-inset ring-brand-400" />
-      )}
+      {highlighted && <OpenedPulse />}
     </div>
   );
 }
@@ -194,17 +189,20 @@ function Kicker({ episode }: { episode: BaseItemDto }) {
 function Head({
   episode,
   play,
+  onHold,
   className,
   oneLine,
 }: {
   episode: BaseItemDto;
-  play: ((opts?: { held?: boolean }) => void) | undefined;
+  play: (() => void) | undefined;
+  /** A mouse press held on the title; rows leave it out, since dragging them would set it off. */
+  onHold?: () => void;
   className?: string;
   /** Keeps a row's cards level. */
   oneLine?: boolean;
 }) {
   const { client } = useSession();
-  const hold = useHold(play && (() => play({ held: true })), { touch: false });
+  const hold = useHold(onHold, { touch: false });
   const setPlayed = useSetPlayed();
   const title = episode.Name || seasonEpisodeTitle(episode);
   const played = !!episode.UserData?.Played;
@@ -226,11 +224,13 @@ function Head({
             title={seasonEpisodeTitle(episode)}
             line={episodeLine(episode)}
             overview={episode.Overview}
-            image={landscapeUrls(client, episode, { maxWidth: 960 })}
+            image={landscapeUrls(client, episode, { maxWidth: 480 })}
             trigger={
               <IconButton
                 data-ui="episode-action"
                 data-name="details"
+                // A playable episode is one stop, and its menu has the rest.
+                data-nav={play ? 'skip' : undefined}
                 size="sm"
                 intent="gray-subtle"
                 className="size-8 rounded-full"
@@ -244,6 +244,7 @@ function Head({
               data-ui="episode-action"
               data-name="watched"
               data-active={played || undefined}
+              data-nav="skip"
               size="sm"
               intent={played ? 'primary' : 'gray-subtle'}
               className="size-8 rounded-full"
@@ -265,7 +266,8 @@ function Head({
           data-ui="episode-title"
           onClick={() => play()}
           {...hold}
-          className="mt-0.5 text-left text-sm font-semibold outline-none after:absolute after:inset-0 after:rounded-xl after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-white/60 sm:text-base"
+          data-focus="own"
+          className="mt-0.5 text-left text-sm font-semibold after:absolute after:inset-0 after:rounded-xl after:content-[''] focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-[--ring] sm:text-base"
         >
           <span className={clamp} title={oneLine ? title : undefined}>
             {title}
@@ -335,7 +337,6 @@ export function EpisodeCard({
           highlighted={highlighted}
           className="rounded-xl"
           numberClass="text-5xl"
-          maxWidth={640}
         />
         <Head episode={episode} play={play} className="px-0.5 pt-2" oneLine />
         <Synopsis episode={episode} className="line-clamp-3 px-0.5" />
@@ -358,19 +359,21 @@ function EpisodeListItem({
         data-ui="episode-list-item"
         {...episodeState(episode)}
         data-highlighted={highlighted || undefined}
-        className={cn(
-          'group/episode relative grid grid-cols-[40%_minmax(0,1fr)] gap-x-3 gap-y-2 rounded-xl p-2 transition-colors hover:bg-white/[0.04] sm:grid-cols-[13rem_minmax(0,1fr)] sm:grid-rows-[auto_1fr] sm:gap-x-4 sm:gap-y-1',
-          highlighted && 'bg-white/[0.06] ring-1 ring-inset ring-brand-400'
-        )}
+        className="group/episode relative grid grid-cols-[40%_minmax(0,1fr)] gap-x-3 gap-y-2 rounded-xl p-2 transition-colors hover:bg-white/[0.04] sm:grid-cols-[13rem_minmax(0,1fr)] sm:grid-rows-[auto_1fr] sm:gap-x-4 sm:gap-y-1"
       >
+        {highlighted && <OpenedPulse />}
         <Thumb
           episode={episode}
           playable={!!play}
           className="rounded-lg sm:row-span-2"
           numberClass="text-3xl sm:text-4xl"
-          maxWidth={480}
         />
-        <Head episode={episode} play={play} className="self-start" />
+        <Head
+          episode={episode}
+          play={play}
+          onHold={play && (() => play({ held: true }))}
+          className="self-start"
+        />
         {/* Beside a phone's thumbnail it would get a few words a line. */}
         <Synopsis
           episode={episode}

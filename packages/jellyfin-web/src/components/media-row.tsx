@@ -11,7 +11,7 @@ import {
 } from '@aiostreams/ui/carousel';
 import { Skeleton } from '@aiostreams/ui/skeleton';
 import { cn } from '@aiostreams/ui/core/styling';
-import { usePosterSize, type PosterSize } from '../lib/settings';
+import { settings, useSetting, type PosterSize } from '../lib/settings';
 
 const ITEM_WIDTH = {
   poster:
@@ -136,7 +136,8 @@ export function MediaRow({
           {title ? (
             <h2
               data-ui="media-row-title"
-              className="min-w-0 truncate text-lg font-semibold sm:text-xl"
+              // Room inside the truncating box for a link's focus outline.
+              className="-m-1 min-w-0 truncate p-1 text-lg font-semibold sm:text-xl"
             >
               {title}
             </h2>
@@ -200,7 +201,7 @@ export function CardGrid({
   shape?: RowShape;
   children: React.ReactNode;
 }) {
-  const [size] = usePosterSize();
+  const [size] = useSetting(settings.posterSize);
   return (
     <div
       data-ui="card-grid"

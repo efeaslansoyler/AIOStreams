@@ -41,12 +41,12 @@ import {
   usePlayExternally,
   usePlay,
 } from '../lib/use-play';
-import { playbackHost } from '../lib/hosts';
+import { currentHost } from '../lib/hosts';
 import { clock, itemSubtitle, itemTitle, ticksToMs } from '../lib/format';
 import { cn } from '@aiostreams/ui/core/styling';
 import { backdropUrl, landscapeUrl } from '../lib/images';
 import { itemPath, navigate, to } from '../lib/paths';
-import { useSkipVersionList } from '../lib/settings';
+import { settings, useSetting } from '../lib/settings';
 import type { BaseItemDto, SourceInfo } from '../lib/types';
 
 interface Request {
@@ -69,18 +69,26 @@ interface PickerValue {
 const PickerContext = React.createContext<PickerValue | null>(null);
 
 /** Opens the picker once, then drops `pick` from the address. */
-export function PickOnArrival({ itemId }: { itemId: string }) {
+export function PickOnArrival({
+  itemId,
+  play,
+}: {
+  itemId: string;
+  /** As Play does, which skips the list when the setting says so. */
+  play?: boolean;
+}) {
   const item = useItem(itemId);
   const picker = useVersionPicker();
   const opened = React.useRef(false);
   React.useEffect(() => {
     if (!item.data || opened.current) return;
     opened.current = true;
-    picker.open(item.data, {
-      startMs: ticksToMs(item.data.UserData?.PlaybackPositionTicks),
-    });
+    const startMs = ticksToMs(item.data.UserData?.PlaybackPositionTicks);
+    // First, since resuming a remembered version goes straight to the player.
     navigate(itemPath(item.data), { replace: true });
-  }, [item.data, picker]);
+    if (play) picker.play(item.data, { startMs });
+    else picker.open(item.data, { startMs });
+  }, [item.data, picker, play]);
   return null;
 }
 
@@ -97,7 +105,7 @@ export function VersionPickerProvider({
 }) {
   const [request, setRequest] = React.useState<Request | null>(null);
   const [external, setExternal] = React.useState<BaseItemDto | null>(null);
-  const [skipList] = useSkipVersionList();
+  const [skipList] = useSetting(settings.skipVersionList);
   const queryClient = useQueryClient();
   const infoOptions = usePlaybackInfoOptions();
   const playVersion = usePlay();
@@ -115,7 +123,7 @@ export function VersionPickerProvider({
       const last =
         startMs > 0 &&
         !opts?.playing &&
-        playbackHost() !== 'android' &&
+        !currentHost().play &&
         !externalAlways()
           ? lastVersions.get(item.Id!)
           : undefined;
@@ -234,8 +242,8 @@ function Versions({
       })
     : sources;
   const art =
-    backdropUrl(client, item, { maxWidth: 1280 }) ??
-    landscapeUrl(client, item, { maxWidth: 1280 });
+    backdropUrl(client, item, { maxWidth: 896 }) ??
+    landscapeUrl(client, item, { maxWidth: 896 });
   // The art ends where the list starts, however tall the header above it grows.
   const listRef = React.useRef<HTMLDivElement>(null);
   const [artHeight, setArtHeight] = React.useState<number>();
@@ -455,7 +463,7 @@ function Versions({
                 type="button"
                 data-ui="version-play"
                 onClick={() => start(source)}
-                className="flex min-w-0 flex-1 items-start gap-3 rounded-xl p-3 text-left outline-none focus-visible:ring-2 focus-visible:ring-white/60"
+                className="flex min-w-0 flex-1 items-start gap-3 rounded-xl p-3 text-left"
               >
                 <span
                   data-ui="version-play-icon"

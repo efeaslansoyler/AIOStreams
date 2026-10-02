@@ -1,16 +1,15 @@
 import React from 'react';
-import { playbackHost } from './hosts';
+import { currentHost } from './hosts';
+import { mediaKeyJustTaken } from './input';
 import type { MediaKey } from './hosts/shell';
 import { itemSubtitle, itemTitle } from './format';
 import { landscapeUrl, posterUrl } from './images';
 import { useItem } from './queries';
 import { useSession } from './session';
-import { useDiscordEvent } from './settings';
+import { settings, useSetting } from './settings';
 import { useLatest, type PlayerController } from './player';
 import type { BaseItemDto } from './types';
 
-/** A browser's skip buttons carry no amount. */
-const SKIP_MS = 10_000;
 /** How far the position may stray from where it should be before the browser is told again. */
 const DRIFT_MS = 2000;
 
@@ -33,7 +32,8 @@ interface Actions {
 
 /**
  * Tells the system's media controls what plays and takes their presses: through
- * the desktop app, which also shows it on Discord, or through the browser.
+ * the desktop app, which also shows it on Discord, the app around the page, or
+ * the browser.
  */
 export function useNowPlaying(
   item: BaseItemDto,
@@ -41,21 +41,23 @@ export function useNowPlaying(
   actions: Actions
 ) {
   const { client } = useSession();
-  const [discord] = useDiscordEvent('playing');
+  const [discord] = useSetting(settings.discord['playing']);
   const show = useItem(item.SeriesId ?? item.Id!);
   const imdb = (item.Type === 'Episode' ? show.data : item)?.ProviderIds?.Imdb;
   const title = itemTitle(item);
   const subtitle = itemSubtitle(item) || null;
   const artwork =
-    landscapeUrl(client, item, { maxWidth: 640 }) ??
-    posterUrl(client, item, { maxWidth: 400 });
+    landscapeUrl(client, item, { maxWidth: 320 }) ??
+    posterUrl(client, item, { maxWidth: 200 });
   const { started, paused, positionMs, durationMs, rate } = player.state;
   const hasNext = !!actions.onNext;
   const hasPrevious = !!actions.onPrevious;
-  const host = playbackHost();
+  const host = currentHost();
+  const desktop = host.name === 'desktop';
 
   const latest = useLatest({ player, actions });
   const press = React.useCallback((key: MediaKey) => {
+    if (mediaKeyJustTaken()) return;
     const { player, actions } = latest.current;
     const { paused, positionMs, durationMs } = player.state;
     switch (key.action) {
@@ -87,7 +89,7 @@ export function useNowPlaying(
 
   React.useEffect(() => {
     const shell = window.aiostreamsDesktop;
-    if (host !== 'shell' || !shell || !started) return;
+    if (!desktop || !shell || !started) return;
     shell.send({
       type: 'now-playing',
       item: {
@@ -101,7 +103,7 @@ export function useNowPlaying(
       },
     });
   }, [
-    host,
+    desktop,
     started,
     title,
     subtitle,
@@ -114,7 +116,7 @@ export function useNowPlaying(
 
   React.useEffect(() => {
     const shell = window.aiostreamsDesktop;
-    if (host !== 'shell' || !shell) return;
+    if (!desktop || !shell) return;
     const unsubscribe = shell.subscribe((m) => {
       if (m.type === 'media-key') press(m.key);
     });
@@ -122,10 +124,57 @@ export function useNowPlaying(
       unsubscribe();
       shell.send({ type: 'now-playing', item: null });
     };
-  }, [host, press]);
+  }, [desktop, press]);
+
+  const app = host.usePlayer ? undefined : host.mediaSession;
+  React.useEffect(() => {
+    if (!app) return;
+    const stop = app.listen?.(press);
+    return () => {
+      stop?.();
+      app.clear();
+    };
+  }, [app, press]);
+
+  const toldApp = React.useRef<{
+    at: number;
+    positionMs: number;
+    key: string;
+  } | null>(null);
+  React.useEffect(() => {
+    if (!app || !started) return;
+    const key = JSON.stringify([item.Id, title, subtitle, artwork, paused]);
+    const last = toldApp.current;
+    const expected =
+      last && last.key === key
+        ? last.positionMs + (paused ? 0 : (Date.now() - last.at) * rate)
+        : null;
+    if (expected != null && Math.abs(expected - positionMs) < DRIFT_MS) return;
+    toldApp.current = { at: Date.now(), positionMs, key };
+    app.update({
+      itemId: item.Id!,
+      title,
+      artist: subtitle ?? '',
+      imageUrl: artwork ?? '',
+      positionMs,
+      durationMs,
+      paused,
+    });
+  }, [
+    app,
+    started,
+    item.Id,
+    title,
+    subtitle,
+    artwork,
+    paused,
+    positionMs,
+    durationMs,
+    rate,
+  ]);
 
   const session =
-    host === 'browser' && 'mediaSession' in navigator
+    !host.usePlayer && !app && 'mediaSession' in navigator
       ? navigator.mediaSession
       : null;
 

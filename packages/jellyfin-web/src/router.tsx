@@ -6,9 +6,8 @@ import {
   createRouter,
   Outlet,
 } from '@tanstack/react-router';
-import { PageBody, WebLayout } from './components/layout';
+import { PageMessage, WebLayout } from './components/layout';
 import { navigate, setNavigator, to } from './lib/paths';
-import { handleAndroidBack } from './lib/hosts/jellyfin-android';
 import { lastCatalog } from './lib/settings';
 import { HomePage } from './pages/home';
 import { DiscoverIndex, DiscoverPage } from './pages/discover';
@@ -148,13 +147,14 @@ const itemRoute = createRoute({
     season: search.season == null ? undefined : String(search.season),
     episode: search.episode == null ? undefined : String(search.episode),
     pick: search.pick == null ? undefined : String(search.pick),
+    play: search.play == null ? undefined : String(search.play),
   }),
   component: ItemRouteView,
 });
 
 function ItemRouteView(): React.ReactElement {
   const { itemId } = itemRoute.useParams();
-  const { season, episode, pick } = itemRoute.useSearch();
+  const { season, episode, pick, play } = itemRoute.useSearch();
   return (
     <ItemPage
       key={itemId}
@@ -162,6 +162,7 @@ function ItemRouteView(): React.ReactElement {
       seasonId={season}
       episodeId={episode}
       pickId={pick}
+      playId={play}
     />
   );
 }
@@ -219,8 +220,8 @@ const routeTree = rootRoute.addChildren([
 
 function NotFoundPage(): React.ReactElement {
   return (
-    <PageBody>
-      <LuffyError title="There is nothing here">
+    <PageMessage>
+      <LuffyError title="There is nothing here" className="mt-0">
         <p className="text-sm text-[--muted]">
           The link may be old, or the page moved.
         </p>
@@ -232,7 +233,7 @@ function NotFoundPage(): React.ReactElement {
           Go home
         </Button>
       </LuffyError>
-    </PageBody>
+    </PageMessage>
   );
 }
 
@@ -243,9 +244,12 @@ export const webRouter = createRouter({
   scrollRestoration: true,
 });
 
-setNavigator((path, replace) =>
-  replace ? webRouter.history.replace(path) : webRouter.history.push(path)
-);
+setNavigator((path, replace) => {
+  if (!replace) return webRouter.history.push(path);
+  webRouter.history.replace(path);
+  // The history batches a tick's changes into one, so a push right after would drop this.
+  webRouter.history.flush();
+});
 
 /*
  * In-app links are plain anchors, so opening one in a new tab works. A plain
@@ -260,5 +264,3 @@ document.addEventListener('click', (e) => {
   e.preventDefault();
   navigate(anchor.getAttribute('href')!.slice(1));
 });
-
-handleAndroidBack(webRouter.history);

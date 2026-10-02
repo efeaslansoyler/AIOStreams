@@ -59,9 +59,10 @@ import {
   untilLabel,
 } from '../lib/format';
 import { href, itemPath, navigate } from '../lib/paths';
-import { useEpisodeLayout } from '../lib/settings';
+import { settings, useSetting } from '../lib/settings';
 import { useInView } from '../lib/use-in-view';
 import { MediaRow } from '../components/media-row';
+import { PageMessage } from '../components/layout';
 import { MixedGrid } from '../components/mixed-grid';
 import { PosterCard } from '../components/cards';
 import { Overview } from '../components/overview';
@@ -87,12 +88,15 @@ export function ItemPage({
   seasonId,
   episodeId,
   pickId,
+  playId,
 }: {
   itemId: string;
   seasonId?: string;
   episodeId?: string;
   /** Opens this item's version list as the page arrives. */
   pickId?: string;
+  /** Plays this item as the page arrives, through the list unless it is skipped. */
+  playId?: string;
 }) {
   const { client } = useSession();
   const item = useItem(itemId);
@@ -108,9 +112,9 @@ export function ItemPage({
 
   if (item.isError) {
     return (
-      <div className="p-10">
-        <LuffyError title="Could not load this title" />
-      </div>
+      <PageMessage>
+        <LuffyError title="Could not load this title" className="mt-0" />
+      </PageMessage>
     );
   }
 
@@ -122,10 +126,12 @@ export function ItemPage({
       data-favourite={data?.UserData?.IsFavorite || undefined}
       className="relative"
     >
-      {pickId && <PickOnArrival itemId={pickId} />}
+      {(pickId || playId) && (
+        <PickOnArrival itemId={(pickId || playId)!} play={!pickId} />
+      )}
       <Backdrop
         images={data ? backdropUrls(client, data, { maxWidth: 1920 }) : []}
-        poster={data ? posterUrl(client, data, { maxWidth: 400 }) : null}
+        poster={data ? posterUrl(client, data, { maxWidth: 160 }) : null}
       />
       <div
         data-ui="item-body"
@@ -312,9 +318,9 @@ function Header({ item, season }: { item: BaseItemDto; season?: BaseItemDto }) {
   const setFavorite = useSetFavorite();
   const setDropped = useSetDropped();
   const nextUp = useNextUpFor(item.Id!, item.Type === 'Series');
-  const logo = logoUrl(client, item);
+  const logo = logoUrl(client, item, { maxWidth: 416 });
   const [logoFailed, setLogoFailed] = React.useState(false);
-  const poster = posterUrl(client, item, { maxWidth: 500 });
+  const poster = posterUrl(client, item, { maxWidth: 320 });
   const played = !!item.UserData?.Played;
   const favorite = !!item.UserData?.IsFavorite;
   const dropped = item.UserData?.Likes === false;
@@ -404,7 +410,7 @@ function Header({ item, season }: { item: BaseItemDto; season?: BaseItemDto }) {
             .filter(Boolean)
             .join(' · ')}
           overview={item.Overview}
-          image={landscapeUrls(client, item, { maxWidth: 960 })}
+          image={landscapeUrls(client, item, { maxWidth: 480 })}
           clampClass="max-h-[4lh]"
           className="text-sm leading-relaxed text-gray-300 sm:text-base"
         />
@@ -609,7 +615,7 @@ function Seasons({
   onSeason: (season: BaseItemDto | undefined) => void;
 }) {
   const { client } = useSession();
-  const [layoutPref] = useEpisodeLayout();
+  const [layoutPref] = useSetting(settings.episodeLayout);
   const wide = useMediaQuery('(min-width: 1024px)');
   const layout = layoutPref === 'auto' ? (wide ? 'row' : 'list') : layoutPref;
   const seasons = useSeasons(series.Id!, true);
@@ -671,7 +677,7 @@ function Seasons({
         >
           {list.map((s) => {
             const selected = s.Id === seasonId;
-            const poster = posterUrl(client, s, { maxWidth: 300 });
+            const poster = posterUrl(client, s, { maxWidth: 120 });
             return (
               <ItemMenu key={s.Id} item={s} onPage>
                 <button
@@ -972,7 +978,7 @@ function SubCollections({ parent }: { parent: BaseItemDto }) {
           <PosterCard
             href={href(itemPath(item))}
             shape={landscape ? 'landscape' : cardShape(item)}
-            image={posterUrl(client, item, { maxWidth: landscape ? 640 : 400 })}
+            image={(width) => posterUrl(client, item, { maxWidth: width })}
             title={item.Name ?? ''}
             subtitle={itemSubtitle(item)}
             watched={item.UserData?.Played}
@@ -1083,7 +1089,7 @@ function Similar({ itemId }: { itemId: string }) {
             <ItemMenu key={item.Id} item={item}>
               <PosterCard
                 href={href(itemPath(item))}
-                image={posterUrl(client, item, { maxWidth: 400 })}
+                image={(width) => posterUrl(client, item, { maxWidth: width })}
                 title={item.Name ?? ''}
                 subtitle={itemSubtitle(item)}
                 watched={item.UserData?.Played}

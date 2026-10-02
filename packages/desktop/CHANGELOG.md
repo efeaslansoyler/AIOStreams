@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.9.3](https://github.com/Viren070/AIOStreams/compare/desktop-v0.9.2...desktop-v0.9.3) (2026-10-01)
+
+
+### Bug Fixes
+
+* **desktop:** only look for Snap and Flatpak Discord sockets on Linux ([52a0a9f](https://github.com/Viren070/AIOStreams/commit/52a0a9f317f18243f240d858628405ab7e0966bc))
+
+## [0.9.2](https://github.com/Viren070/AIOStreams/compare/desktop-v0.9.1...desktop-v0.9.2) (2026-10-01)
+
+
+### Features
+
+* **frontend:** open the desktop app from the install card ([e7ca6b2](https://github.com/Viren070/AIOStreams/commit/e7ca6b229332158683b593bab86a1219b55db34e))
+* **jellyfin-web:** send skip actions to the Android app's player ([e7ca6b2](https://github.com/Viren070/AIOStreams/commit/e7ca6b229332158683b593bab86a1219b55db34e))
+
+## [0.9.1](https://github.com/Viren070/AIOStreams/compare/desktop-v0.9.0...desktop-v0.9.1) (2026-09-30)
+
+
+### Features
+
+* **jellyfin-web:** show a message for no libraries ([2ba1032](https://github.com/Viren070/AIOStreams/commit/2ba10321059e9517363d9e6b6a20c8201087df50))
+
 ## [0.9.0](https://github.com/Viren070/AIOStreams/compare/desktop-v0.8.0...desktop-v0.9.0) (2026-09-30)
 
 

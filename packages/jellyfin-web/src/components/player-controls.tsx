@@ -41,28 +41,37 @@ import {
 import { LoadingSpinner } from '@aiostreams/ui/loading-spinner';
 import { cn } from '@aiostreams/ui/core/styling';
 import { clock, itemSubtitle, itemTitle, ticksToMs } from '../lib/format';
-import type { PlayerController, PlayerState, Track } from '../lib/player';
-import { playbackHost } from '../lib/hosts';
-import { delayLabel } from '../lib/subtitle-lines';
 import {
-  SUBTITLE_POSITION_MAX,
-  SUBTITLE_SCALES,
-  useSeekStep,
-  useSegmentActions,
-  useSubtitlePosition,
-  useSubtitleScale,
-  useVideoFit,
+  useLatest,
+  type PlayerController,
+  type PlayerState,
+  type Track,
+} from '../lib/player';
+import { currentHost } from '../lib/hosts';
+import { delayLabel, SUBTITLE_DELAY_STEP_MS } from '../lib/subtitle-lines';
+import {
+  settings,
+  useSetting,
   type SegmentType,
+  SUBTITLE_POSITION_MAX,
+  SUBTITLE_SIZES,
   VIDEO_FITS,
   type VideoFit,
 } from '../lib/settings';
+import {
+  stepSubtitleHeight,
+  stepSubtitleSize,
+  SUBTITLE_SIZE_LABELS,
+} from '../lib/subtitle-style';
 import { SyncByEar, SyncToLine } from './subtitle-sync';
+import { RATES, usePlayerKeys } from './player-keys';
 import { chapterAt, type Chapter } from '../lib/chapters';
 import type { BaseItemDto, MediaSegmentDto } from '../lib/types';
 
 const IDLE_MS = 2000;
 const SKIP_BUTTON_MS = 8000;
-const RATES = [0.5, 0.75, 1, 1.25, 1.5, 2];
+/** Skips this close together add up to one seek. */
+const SEEK_BURST_MS = 400;
 const SEGMENT_NAME: Record<string, string> = {
   Intro: 'intro',
   Recap: 'recap',
@@ -89,7 +98,7 @@ function segmentsOf(items: MediaSegmentDto[] | null | undefined): Segment[] {
     .filter((s) => s.endMs > s.startMs);
 }
 
-function useIdle(ms: number): [boolean, () => void] {
+function useIdle(ms: number): [boolean, () => void, () => void] {
   const [idle, setIdle] = React.useState(false);
   const timer = React.useRef<ReturnType<typeof setTimeout>>(undefined);
   const wake = React.useCallback(() => {
@@ -97,11 +106,15 @@ function useIdle(ms: number): [boolean, () => void] {
     clearTimeout(timer.current);
     timer.current = setTimeout(() => setIdle(true), ms);
   }, [ms]);
+  const sleep = React.useCallback(() => {
+    clearTimeout(timer.current);
+    setIdle(true);
+  }, []);
   React.useEffect(() => {
     wake();
     return () => clearTimeout(timer.current);
   }, [wake]);
-  return [idle, wake];
+  return [idle, wake, sleep];
 }
 
 function ControlButton({
@@ -130,6 +143,9 @@ function ControlButton({
   );
 }
 
+const arrowDirection = (key: string) =>
+  key === 'ArrowRight' ? 1 : key === 'ArrowLeft' ? -1 : 0;
+
 /** The timeline, with segments and chapters marked, a hover time and drag to seek. */
 function SeekBar({
   positionMs,
@@ -138,6 +154,7 @@ function SeekBar({
   segments,
   chapters,
   onSeek,
+  onStep,
 }: {
   positionMs: number;
   durationMs: number;
@@ -145,6 +162,8 @@ function SeekBar({
   segments: Segment[];
   chapters: Chapter[];
   onSeek(ms: number): void;
+  /** The arrow keys skip as the skip buttons do. */
+  onStep(direction: number): void;
 }) {
   const bar = React.useRef<HTMLDivElement>(null);
   const [hover, setHover] = React.useState<number | null>(null);
@@ -167,8 +186,16 @@ function SeekBar({
       aria-valuemin={0}
       aria-valuemax={Math.round(durationMs / 1000)}
       aria-valuenow={Math.round(shown / 1000)}
+      aria-valuetext={clock(shown)}
+      tabIndex={0}
       data-ui="seek-bar"
-      className="group/seek relative flex h-5 cursor-pointer touch-none items-center"
+      className="group/seek relative flex h-5 cursor-pointer touch-none items-center rounded-full"
+      onKeyDown={(e) => {
+        const direction = arrowDirection(e.key);
+        if (!direction) return;
+        e.preventDefault();
+        onStep(direction);
+      }}
       onPointerDown={(e) => {
         if (!durationMs) return;
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -253,6 +280,7 @@ function VolumeBar({
   max: number;
   onChange(volume: number): void;
 }) {
+  const [step] = useSetting(settings.volumeStep);
   const bar = React.useRef<HTMLDivElement>(null);
   const [dragging, setDragging] = React.useState(false);
   const at = (clientX: number) => {
@@ -271,8 +299,18 @@ function VolumeBar({
       aria-valuemin={0}
       aria-valuemax={Math.round(max * 100)}
       aria-valuenow={Math.round(level * 100)}
+      tabIndex={0}
+      // Arrows pass over it: it keeps Left and Right, and the volume has its own keys.
+      data-nav="skip"
       data-ui="volume-bar"
-      className="relative flex h-5 w-20 flex-none cursor-pointer touch-none items-center"
+      className="relative flex h-5 w-20 flex-none cursor-pointer touch-none items-center rounded-full"
+      onKeyDown={(e) => {
+        const direction = arrowDirection(e.key);
+        if (!direction) return;
+        e.preventDefault();
+        const next = Math.round((level + (direction * step) / 100) * 100) / 100;
+        onChange(Math.min(max, Math.max(0, next)));
+      }}
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId);
         setDragging(true);
@@ -409,8 +447,6 @@ function Menu({
   );
 }
 
-const DELAY_STEP_MS = 100;
-
 const FIT_BUTTON: Record<VideoFit, { label: string; icon: React.ReactNode }> = {
   fit: { label: 'Fit', icon: <LuRatio /> },
   crop: { label: 'Crop', icon: <LuCrop /> },
@@ -418,7 +454,7 @@ const FIT_BUTTON: Record<VideoFit, { label: string; icon: React.ReactNode }> = {
 };
 
 function FitButton() {
-  const [fit, setFit] = useVideoFit();
+  const [fit, setFit] = useSetting(settings.videoFit);
   const next = VIDEO_FITS[(VIDEO_FITS.indexOf(fit) + 1) % VIDEO_FITS.length];
   return (
     <ControlButton
@@ -428,6 +464,96 @@ function FitButton() {
     >
       {FIT_BUTTON[fit].icon}
     </ControlButton>
+  );
+}
+
+const keepOpen = (e: Event) => e.preventDefault();
+
+interface Step {
+  label: string;
+  /** Missing at the end of the range. */
+  onClick?: () => void;
+}
+
+/** A value with a button either side, which leave the menu open. */
+function Stepper({
+  label,
+  value,
+  less,
+  more,
+}: {
+  label?: string;
+  value: string;
+  less: Step;
+  more: Step;
+}) {
+  const button = (step: Step, icon: React.ReactNode) => (
+    <DropdownMenuItem
+      onSelect={keepOpen}
+      onClick={step.onClick}
+      disabled={!step.onClick}
+      className="justify-center"
+      aria-label={step.label}
+    >
+      {icon}
+    </DropdownMenuItem>
+  );
+  return (
+    <div className="flex items-center gap-1 px-1 pb-1">
+      {label && <span className="flex-1 px-1 text-sm">{label}</span>}
+      {button(less, <LuMinus />)}
+      <span
+        className={cn(
+          'min-w-16 text-center text-sm tabular-nums',
+          !label && 'flex-1'
+        )}
+      >
+        {value}
+      </span>
+      {button(more, <LuPlus />)}
+    </div>
+  );
+}
+
+/** Size and height, which every video on this device keeps. */
+function SubtitleStyleSteppers() {
+  const [size] = useSetting(settings.subtitle.size);
+  const [height] = useSetting(settings.subtitle.position);
+  const at = SUBTITLE_SIZES.indexOf(size);
+  return (
+    <>
+      <DropdownMenuLabel className="pt-3">Style</DropdownMenuLabel>
+      <Stepper
+        label="Size"
+        value={SUBTITLE_SIZE_LABELS[size]}
+        less={{
+          label: 'Smaller subtitles',
+          onClick: at > 0 ? () => stepSubtitleSize(-1) : undefined,
+        }}
+        more={{
+          label: 'Bigger subtitles',
+          onClick:
+            at < SUBTITLE_SIZES.length - 1
+              ? () => stepSubtitleSize(1)
+              : undefined,
+        }}
+      />
+      <Stepper
+        label="Height"
+        value={`${height}%`}
+        less={{
+          label: 'Lower subtitles',
+          onClick: height > 0 ? () => stepSubtitleHeight(-1) : undefined,
+        }}
+        more={{
+          label: 'Raise subtitles',
+          onClick:
+            height < SUBTITLE_POSITION_MAX
+              ? () => stepSubtitleHeight(1)
+              : undefined,
+        }}
+      />
+    </>
   );
 }
 
@@ -443,31 +569,20 @@ function SubtitleSync({
   onSyncByEar(): void;
   onSyncToLine?: () => void;
 }) {
-  const keepOpen = (e: Event) => e.preventDefault();
   return (
     <>
       <DropdownMenuLabel className="pt-3">Sync</DropdownMenuLabel>
-      <div className="flex items-center gap-1 px-1 pb-1">
-        <DropdownMenuItem
-          onSelect={keepOpen}
-          onClick={() => onChange(delayMs - DELAY_STEP_MS)}
-          className="justify-center"
-          aria-label="Show subtitles earlier"
-        >
-          <LuMinus />
-        </DropdownMenuItem>
-        <span className="min-w-16 flex-1 text-center text-sm tabular-nums">
-          {delayLabel(delayMs)}
-        </span>
-        <DropdownMenuItem
-          onSelect={keepOpen}
-          onClick={() => onChange(delayMs + DELAY_STEP_MS)}
-          className="justify-center"
-          aria-label="Show subtitles later"
-        >
-          <LuPlus />
-        </DropdownMenuItem>
-      </div>
+      <Stepper
+        value={delayLabel(delayMs)}
+        less={{
+          label: 'Show subtitles earlier',
+          onClick: () => onChange(delayMs - SUBTITLE_DELAY_STEP_MS),
+        }}
+        more={{
+          label: 'Show subtitles later',
+          onClick: () => onChange(delayMs + SUBTITLE_DELAY_STEP_MS),
+        }}
+      />
       <DropdownMenuItem onClick={onSyncByEar}>
         <LuEar className="flex-none" />
         Sync by ear…
@@ -488,89 +603,6 @@ function SubtitleSync({
   );
 }
 
-/** A value stepped down or up without closing the menu. */
-function Stepper({
-  label,
-  value,
-  onDown,
-  onUp,
-  downLabel,
-  upLabel,
-}: {
-  label: string;
-  value: string;
-  onDown?: () => void;
-  onUp?: () => void;
-  downLabel: string;
-  upLabel: string;
-}) {
-  const keepOpen = (e: Event) => e.preventDefault();
-  return (
-    <>
-      <DropdownMenuLabel className="pt-3">{label}</DropdownMenuLabel>
-      <div className="flex items-center gap-1 px-1 pb-1">
-        <DropdownMenuItem
-          onSelect={keepOpen}
-          onClick={onDown}
-          disabled={!onDown}
-          className="justify-center"
-          aria-label={downLabel}
-        >
-          <LuMinus />
-        </DropdownMenuItem>
-        <span className="min-w-16 flex-1 text-center text-sm tabular-nums">
-          {value}
-        </span>
-        <DropdownMenuItem
-          onSelect={keepOpen}
-          onClick={onUp}
-          disabled={!onUp}
-          className="justify-center"
-          aria-label={upLabel}
-        >
-          <LuPlus />
-        </DropdownMenuItem>
-      </div>
-    </>
-  );
-}
-
-/** The subtitle size and height, saved as the settings and shown at once. */
-function SubtitleLook() {
-  const [scale, setScale] = useSubtitleScale();
-  const [position, setPosition] = useSubtitlePosition();
-  const i = SUBTITLE_SCALES.indexOf(scale as (typeof SUBTITLE_SCALES)[number]);
-  const smaller = SUBTITLE_SCALES[i - 1];
-  const larger = SUBTITLE_SCALES[i + 1];
-  return (
-    <>
-      <Stepper
-        label="Size"
-        value={`${scale}%`}
-        onDown={smaller ? () => setScale(smaller) : undefined}
-        onUp={larger ? () => setScale(larger) : undefined}
-        downLabel="Smaller subtitles"
-        upLabel="Larger subtitles"
-      />
-      {/* Only mpv can move subtitles. */}
-      {playbackHost() === 'shell' && (
-        <Stepper
-          label="Raise"
-          value={`${position}%`}
-          onDown={position > 0 ? () => setPosition(position - 1) : undefined}
-          onUp={
-            position < SUBTITLE_POSITION_MAX
-              ? () => setPosition(position + 1)
-              : undefined
-          }
-          downLabel="Lower subtitles"
-          upLabel="Raise subtitles"
-        />
-      )}
-    </>
-  );
-}
-
 /** The position at this moment, between the player's few reports a second. */
 function usePositionClock(state: PlayerState): () => number {
   const last = React.useRef({ positionMs: 0, at: 0, paused: true, rate: 1 });
@@ -586,11 +618,40 @@ function usePositionClock(state: PlayerState): () => number {
   }, []);
 }
 
-function isTyping(target: EventTarget | null): boolean {
-  return (
-    target instanceof HTMLElement &&
-    (target.isContentEditable ||
-      ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))
+/** Seeks at once, then gathers the skips that follow into one seek once they stop. */
+function useBurstSeek(player: PlayerController): (deltaMs: number) => void {
+  const latest = useLatest(player);
+  const burst = React.useRef<{
+    target: number;
+    sent: boolean;
+    timer: ReturnType<typeof setTimeout>;
+  } | null>(null);
+  React.useEffect(() => () => clearTimeout(burst.current?.timer), []);
+  return React.useCallback(
+    (deltaMs: number) => {
+      const { state, seek } = latest.current;
+      const last = burst.current;
+      clearTimeout(last?.timer);
+      const to = Math.max(0, (last?.target ?? state.positionMs) + deltaMs);
+      const target = state.durationMs ? Math.min(state.durationMs, to) : to;
+      const settle = () => {
+        const current = burst.current;
+        if (!current || current.sent) {
+          burst.current = null;
+          return;
+        }
+        latest.current.seek(current.target);
+        current.sent = true;
+        current.timer = setTimeout(settle, SEEK_BURST_MS);
+      };
+      if (!last) seek(target);
+      burst.current = {
+        target,
+        sent: !last,
+        timer: setTimeout(settle, SEEK_BURST_MS),
+      };
+    },
+    [latest]
   );
 }
 
@@ -718,7 +779,8 @@ export function PlayerControls({
   offeringNext?: boolean;
 }) {
   const { state } = player;
-  const [idle, wake] = useIdle(IDLE_MS);
+  const [idle, wake, sleep] = useIdle(IDLE_MS);
+  const root = React.useRef<HTMLDivElement>(null);
   const [menus, setMenus] = React.useState(0);
   const pointerType = React.useRef('mouse');
   const segments = React.useMemo(() => segmentsOf(rawSegments), [rawSegments]);
@@ -749,32 +811,21 @@ export function PlayerControls({
     },
     []
   );
+  // Hidden controls let go of focus, so the arrow keys seek again.
+  React.useEffect(() => {
+    const el = document.activeElement;
+    if (!visible && el instanceof HTMLElement && root.current?.contains(el))
+      el.blur();
+  }, [visible]);
   const positionNow = usePositionClock(state);
-  const latest = React.useRef(player);
-  latest.current = player;
-  const episodes = React.useRef({ onPrevious, onNext });
-  episodes.current = { onPrevious, onNext };
+  const latest = useLatest(player);
   const loadLines = React.useCallback(
     () => latest.current.subtitleLines?.() ?? Promise.resolve(null),
-    []
+    [latest]
   );
   const [flash, showFlash] = useToggleFlash();
   const [seekFlash, showSeekFlash] = useSeekFlash();
   const [notice, showNotice] = useNotice();
-  const nudgeSubtitles = (by: number) => {
-    const p = latest.current;
-    if (!p.setSubtitleDelay || !p.state.subtitle) return;
-    const next = p.state.subtitleDelayMs + by;
-    p.setSubtitleDelay(next);
-    showNotice(`Subtitles ${delayLabel(next).toLowerCase()}`);
-  };
-  const nudgeVolume = (by: number) => {
-    const p = latest.current;
-    const next = Math.round((p.state.volume + by) * 100) / 100;
-    const volume = Math.min(p.state.maxVolume, Math.max(0, next));
-    p.setVolume(volume);
-    showNotice(`Volume ${Math.round(volume * 100)}%`);
-  };
   const togglePlay = () => {
     showFlash(latest.current.state.paused);
     latest.current.togglePlay();
@@ -791,53 +842,14 @@ export function PlayerControls({
   };
   const closeByEar = React.useCallback(() => setByEar(false), []);
 
-  const [seekStep] = useSeekStep();
-  const stepMs = React.useRef(seekStep * 1000);
-  stepMs.current = seekStep * 1000;
-  const seekBy = (delta: number) => {
-    const { positionMs, durationMs } = latest.current.state;
-    const target = Math.max(0, positionMs + delta);
-    latest.current.seek(durationMs ? Math.min(durationMs, target) : target);
-    showSeekFlash(delta);
+  const [seekStep] = useSetting(settings.seekStep);
+  const burstSeek = useBurstSeek(player);
+  const seekBy = (deltaMs: number) => {
+    burstSeek(deltaMs);
+    showSeekFlash(deltaMs);
   };
 
-  React.useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey) return;
-      if (isTyping(e.target) || document.querySelector('[role="dialog"]'))
-        return;
-      const p = latest.current;
-      const actions: Record<string, () => void> = {
-        ' ': togglePlay,
-        k: togglePlay,
-        ArrowLeft: () => seekBy(-stepMs.current),
-        j: () => seekBy(-stepMs.current),
-        ArrowRight: () => seekBy(stepMs.current),
-        l: () => seekBy(stepMs.current),
-        ArrowUp: () => nudgeVolume(0.05),
-        ArrowDown: () => nudgeVolume(-0.05),
-        m: p.toggleMute,
-        f: p.toggleFullscreen,
-        z: () => nudgeSubtitles(-DELAY_STEP_MS),
-        x: () => nudgeSubtitles(DELAY_STEP_MS),
-        i: () => {
-          const stats = latest.current.stats;
-          stats?.show(stats.page ? null : '1');
-        },
-        P: () => episodes.current.onPrevious?.(),
-        N: () => episodes.current.onNext?.(),
-      };
-      const action = actions[e.key];
-      if (!action) return;
-      e.preventDefault();
-      action();
-      wake();
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [wake]);
-
-  const segmentActions = useSegmentActions();
+  const [segmentActions] = useSetting(settings.segmentActions);
   const inside = segments.filter(
     (s) => state.positionMs >= s.startMs && state.positionMs < s.endMs - 1000
   );
@@ -868,6 +880,21 @@ export function PlayerControls({
     const timer = setTimeout(() => setSegmentFresh(false), SKIP_BUTTON_MS);
     return () => clearTimeout(timer);
   }, [shownSegment]);
+  const skipSegment =
+    segment && !offeringNext ? () => player.seek(segment.endMs) : undefined;
+  usePlayerKeys({
+    player,
+    root,
+    wake,
+    hide: sleep,
+    notice: showNotice,
+    togglePlay,
+    seekBy,
+    onBack,
+    onPrevious,
+    onNext,
+    skipSegment,
+  });
   const onMenu = (open: boolean) => setMenus((n) => n + (open ? 1 : -1));
   const subtitleOptions = [{ id: '', label: 'Off' }, ...player.subtitleTracks];
   const chapters = player.chapters ?? [];
@@ -895,13 +922,13 @@ export function PlayerControls({
       name: 'back',
       label: `Back ${seekStep} seconds`,
       icon: <LuRotateCcw />,
-      onClick: () => seekBy(-stepMs.current),
+      onClick: () => seekBy(-seekStep * 1000),
     },
     forward: {
       name: 'forward',
       label: `Forward ${seekStep} seconds`,
       icon: <LuRotateCw />,
-      onClick: () => seekBy(stepMs.current),
+      onClick: () => seekBy(seekStep * 1000),
     },
     next: isEpisode && {
       name: 'next',
@@ -943,6 +970,7 @@ export function PlayerControls({
 
   return (
     <div
+      ref={root}
       data-ui="player-controls"
       data-visible={visible || undefined}
       data-paused={state.paused || undefined}
@@ -951,6 +979,8 @@ export function PlayerControls({
         'fixed inset-0 z-10 select-none',
         !visible && 'cursor-none'
       )}
+      onFocus={wake}
+      onKeyDown={wake}
       onPointerMove={wake}
       onContextMenu={(e) => e.preventDefault()}
       onPointerDown={(e) => {
@@ -1060,7 +1090,7 @@ export function PlayerControls({
             intent="white"
             className="rounded-full shadow-lg"
             rightIcon={<LuSkipForward />}
-            onClick={() => player.seek(segment.endMs)}
+            onClick={skipSegment}
           >
             {SEGMENT_NAME[segment.type]
               ? `Skip ${SEGMENT_NAME[segment.type]}`
@@ -1089,6 +1119,7 @@ export function PlayerControls({
           segments={segments}
           chapters={chapters}
           onSeek={player.seek}
+          onStep={(direction) => seekBy(direction * seekStep * 1000)}
         />
         <div className="flex items-center gap-1">
           <div className="hidden items-center gap-1 lg:flex">
@@ -1137,7 +1168,7 @@ export function PlayerControls({
                           }
                         />
                       )}
-                      <SubtitleLook />
+                      <SubtitleStyleSteppers />
                     </>
                   )
                 }
@@ -1191,7 +1222,7 @@ export function PlayerControls({
               onSelect={(id) => id && player.setRate(Number(id))}
               onOpenChange={onMenu}
             />
-            {(playbackHost() === 'browser' || playbackHost() === 'shell') && (
+            {(!currentHost().usePlayer || currentHost().name === 'desktop') && (
               <FitButton />
             )}
             {player.stats && (

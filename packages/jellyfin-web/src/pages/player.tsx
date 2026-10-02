@@ -25,17 +25,14 @@ import {
   subtitleUrl,
   textSubtitles,
 } from '../lib/playback';
-import { playbackHost } from '../lib/hosts';
+import { currentHost } from '../lib/hosts';
 import { useFeature } from '../lib/server-info';
 import { useBrowserPlayer, usePhoneFullscreen } from '../lib/hosts/browser';
-import { useDesktopPlayer } from '../lib/hosts/jellyfin-desktop';
-import { useShellPlayer } from '../lib/hosts/shell';
 import { useNowPlaying } from '../lib/now-playing';
-import type { PlayerController } from '../lib/player';
+import type { NativePlayerOptions, PlayerController } from '../lib/player';
 import {
-  useChapterSkips,
-  useSubtitleStyle,
-  useVideoFit,
+  settings,
+  useSetting,
   type SubtitleStyle,
   type VideoFit,
 } from '../lib/settings';
@@ -49,7 +46,7 @@ import {
   useVersionPicker,
   VersionPickerProvider,
 } from '../components/version-picker';
-import { chapterSegments } from '../lib/chapters';
+import { chapterSegments, guessedSegments } from '../lib/chapters';
 import type { BaseItemDto, MediaSegmentDto, SourceInfo } from '../lib/types';
 
 interface PlayerProps {
@@ -97,7 +94,7 @@ export function PlayerPage({
   const info = usePlaybackInfo(itemId, { sourceId: sourceId || undefined });
   const playback = usePlaybackPrefs();
   usePlayerPage();
-  usePhoneFullscreen(playbackHost() === 'browser');
+  usePhoneFullscreen(!currentHost().usePlayer);
 
   // Pinned once found: a refreshed version list must not restart playback.
   const [playing, setPlaying] = React.useState<Omit<
@@ -133,11 +130,11 @@ export function PlayerPage({
       <Failure itemId={itemId} message="This version is no longer available." />
     );
   }
-  const host = playbackHost();
+  const { usePlayer } = currentHost();
   return (
     <VersionPickerProvider>
-      {host === 'shell' || host === 'desktop' ? (
-        <NativePlayer {...playing} startMs={startMs} />
+      {usePlayer ? (
+        <NativePlayer {...playing} startMs={startMs} usePlayer={usePlayer} />
       ) : (
         <BrowserPlayer {...playing} startMs={startMs} />
       )}
@@ -338,7 +335,7 @@ function cueCss(style: SubtitleStyle): string {
   const css = subtitleCss(style);
   return `video::cue {
     font-size: calc(${subtitleScale(style)} * 5vh);
-    font-weight: ${css.fontWeight};${css.fontFamily ? `\n    font-family: ${css.fontFamily};` : ''}
+    font-weight: ${css.fontWeight};
     color: ${css.color};
     background-color: ${css.backgroundColor};
     text-shadow: ${css.textShadow};
@@ -355,8 +352,8 @@ function BrowserPlayer({
   const { client } = useSession();
   const video = React.useRef<HTMLVideoElement>(null);
   const { back, onEnded, connect } = useEnded(item);
-  const subtitleStyle = useSubtitleStyle();
-  const [fit] = useVideoFit();
+  const [subtitleStyle] = useSetting(settings.subtitleStyle);
+  const [fit] = useSetting(settings.videoFit);
   const player = useBrowserPlayer(video, {
     source,
     startMs,
@@ -431,23 +428,31 @@ function BrowserPlayer({
 
 /**
  * The server's segments and the ones the file's chapters name: where both have
- * a kind, the chapters' when preferred, else the server's.
+ * a kind, the chapters' when preferred, else the server's. Guesses from
+ * chapter lengths fill the kinds neither has.
  */
 function useShownSegments(
+  item: BaseItemDto,
   segments: MediaSegmentDto[] | null | undefined,
   player: PlayerController
 ) {
   const { chapters } = player;
   const { durationMs } = player.state;
-  const [preferChapters] = useChapterSkips();
+  const [preferChapters] = useSetting(settings.desktop.chapterSkips);
+  const episode = item.Type === 'Episode';
   return React.useMemo(() => {
     const named = chapterSegments(chapters ?? [], durationMs);
-    const [first, second] = preferChapters
-      ? [named, segments ?? []]
-      : [segments ?? [], named];
-    const kinds = new Set(first.map((s) => String(s.Type)));
-    return [...first, ...second.filter((s) => !kinds.has(String(s.Type)))];
-  }, [segments, chapters, durationMs, preferChapters]);
+    const server = segments ?? [];
+    const guessed = episode ? guessedSegments(chapters ?? [], durationMs) : [];
+    const kinds = new Set<string>();
+    return (
+      preferChapters ? [named, server, guessed] : [server, named, guessed]
+    ).flatMap((source) => {
+      const added = source.filter((s) => !kinds.has(String(s.Type)));
+      added.forEach((s) => kinds.add(String(s.Type)));
+      return added;
+    });
+  }, [segments, chapters, durationMs, preferChapters, episode]);
 }
 
 /**
@@ -460,13 +465,14 @@ function NativePlayer({
   playSessionId,
   startMs,
   prefs,
-}: PlayerProps) {
+  usePlayer,
+}: PlayerProps & {
+  usePlayer: (opts: NativePlayerOptions) => PlayerController;
+}) {
   const { client } = useSession();
   const { back, onEnded, connect } = useEnded(item);
-  const subtitleStyle = useSubtitleStyle();
-  const useNativePlayer =
-    playbackHost() === 'shell' ? useShellPlayer : useDesktopPlayer;
-  const player = useNativePlayer({
+  const [subtitleStyle] = useSetting(settings.subtitleStyle);
+  const player = usePlayer({
     client,
     item,
     url: streamUrl(client, item.Id!, source, playSessionId),
@@ -476,7 +482,11 @@ function NativePlayer({
     prefs,
     subtitleStyle,
   });
-  const segments = useShownSegments(useSegments(item.Id!).data?.Items, player);
+  const segments = useShownSegments(
+    item,
+    useSegments(item.Id!).data?.Items,
+    player
+  );
   const next = useNextEpisodePrompt({
     item,
     source,

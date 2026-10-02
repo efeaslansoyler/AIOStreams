@@ -96,10 +96,6 @@ export type SelectProps = InputStyling &
      */
     defaultValue?: string;
     /**
-     * `popper` opens a list of fixed height below the field, for long lists
-     */
-    position?: 'item-aligned' | 'popper';
-    /**
      * Ref to the input element
      */
     inputRef?: React.Ref<HTMLSelectElement>;
@@ -137,7 +133,6 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
         onOpenChange,
         defaultValue,
         inputRef,
-        position,
         ...rest
       },
       {
@@ -239,14 +234,7 @@ export const Select = React.forwardRef<HTMLButtonElement, SelectProps>(
 
             <SelectPrimitive.Portal>
               <SelectPrimitive.Content
-                position={position}
-                sideOffset={position === 'popper' ? 4 : undefined}
-                className={cn(
-                  SelectAnatomy.content(),
-                  position === 'popper' &&
-                    'max-h-[min(20rem,var(--radix-select-content-available-height))] min-w-[var(--radix-select-trigger-width)]',
-                  contentClass
-                )}
+                className={cn(SelectAnatomy.content(), contentClass)}
               >
                 <SelectPrimitive.ScrollUpButton
                   className={cn(

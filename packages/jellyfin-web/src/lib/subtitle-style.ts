@@ -1,4 +1,48 @@
-import type { SubtitleOutline, SubtitleStyle } from './settings';
+import {
+  settings,
+  SUBTITLE_POSITION_MAX,
+  SUBTITLE_SIZES,
+  type SubtitleOutline,
+  type SubtitleSize,
+  type SubtitleStyle,
+} from './settings';
+
+const SCALE: Record<SubtitleSize, number> = {
+  small: 0.8,
+  normal: 1,
+  large: 1.25,
+  huge: 1.5,
+};
+
+export const SUBTITLE_SIZE_LABELS: Record<SubtitleSize, string> = {
+  small: 'Small',
+  normal: 'Normal',
+  large: 'Large',
+  huge: 'Huge',
+};
+
+/** One size up or down; null at either end. */
+export function stepSubtitleSize(sign: number): SubtitleSize | null {
+  const at = SUBTITLE_SIZES.indexOf(settings.subtitle.size.read());
+  const next = SUBTITLE_SIZES[at + sign];
+  if (!next) return null;
+  settings.subtitle.size.write(next);
+  return next;
+}
+
+const HEIGHT_STEP = 2;
+
+/** A little higher or lower; null at either end. */
+export function stepSubtitleHeight(sign: number): number | null {
+  const height = settings.subtitle.position.read();
+  const next = Math.min(
+    SUBTITLE_POSITION_MAX,
+    Math.max(0, height + sign * HEIGHT_STEP)
+  );
+  if (next === height) return null;
+  settings.subtitle.position.write(next);
+  return next;
+}
 
 const OUTLINE_PX: Record<SubtitleOutline, number> = {
   none: 0,
@@ -15,27 +59,7 @@ export const MPV_OUTLINE: Record<SubtitleOutline, number> = {
   thick: 3,
 };
 
-export const subtitleScale = (style: SubtitleStyle) => style.scale / 100;
-
-/** mpv's own subtitle font, used when none is picked. */
-export const mpvSubtitleFont = (style: SubtitleStyle) =>
-  style.font || 'sans-serif';
-
-/** The families of the fonts installed on this computer, sorted; empty where they can't be read. */
-export async function installedFonts(): Promise<string[]> {
-  const query = (
-    window as { queryLocalFonts?: () => Promise<{ family: string }[]> }
-  ).queryLocalFonts;
-  if (!query) return [];
-  const fonts = await query.call(window);
-  return [...new Set(fonts.map((f) => f.family))].sort((a, b) =>
-    a.localeCompare(b)
-  );
-}
-
-/** mpv's `sub-pos`: 100 is its usual place at the bottom, 0 the top. */
-export const mpvSubtitlePosition = (style: SubtitleStyle) =>
-  100 - style.position;
+export const subtitleScale = (style: SubtitleStyle) => SCALE[style.size];
 
 /** Percent from the top where an unplaced subtitle's bottom sits, as mpv places it. */
 export const subtitleLine = (style?: SubtitleStyle) =>
@@ -52,18 +76,16 @@ export function subtitleCss(style: SubtitleStyle): {
   textShadow: string;
   fontSize: string;
   fontWeight: number;
-  fontFamily?: string;
 } {
   const px = OUTLINE_PX[style.outline];
   const c = style.outlineColor;
   return {
-    fontFamily: style.font ? `"${style.font}", sans-serif` : undefined,
     color: style.textColor,
     backgroundColor: rgba(style.backgroundColor, style.backgroundOpacity),
     textShadow: px
       ? `${-px}px ${-px}px 0 ${c}, ${px}px ${-px}px 0 ${c}, ${-px}px ${px}px 0 ${c}, ${px}px ${px}px 0 ${c}`
       : 'none',
-    fontSize: `${style.scale}%`,
+    fontSize: `${SCALE[style.size] * 100}%`,
     fontWeight: style.bold ? 700 : 500,
   };
 }

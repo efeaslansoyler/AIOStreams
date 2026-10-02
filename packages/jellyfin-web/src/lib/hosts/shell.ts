@@ -5,12 +5,11 @@ import { subtitleUrl, textSubtitles } from '../playback';
 import { sameLanguage } from '../languages';
 import { parseChapters, type Chapter } from '../chapters';
 import {
+  settings,
+  useSetting,
   onSettingsChange,
-  readDesktopSettings,
-  type DesktopSettings,
   type UpdateChannelSetting,
   type SubtitleStyle,
-  useVideoFit,
 } from '../settings';
 import type { PlaybackPrefs } from '../user-config';
 import {
@@ -19,13 +18,7 @@ import {
   savedSubtitleDelay,
   saveSubtitleDelay,
 } from '../subtitle-lines';
-import {
-  MPV_OUTLINE,
-  mpvColor,
-  mpvSubtitleFont,
-  mpvSubtitlePosition,
-  subtitleScale,
-} from '../subtitle-style';
+import { MPV_OUTLINE, mpvColor, subtitleScale } from '../subtitle-style';
 import {
   initialState,
   storedVolume,
@@ -37,6 +30,7 @@ import {
   type PlayerState,
   type Track,
 } from '../player';
+import type { Host } from '.';
 
 export type ShellMessage =
   | { type: 'mpv-prop'; name: string; data: unknown }
@@ -187,7 +181,7 @@ export function useShellPlayer(opts: NativePlayerOptions): PlayerController {
     []
   );
 
-  const [fit] = useVideoFit();
+  const [fit] = useSetting(settings.videoFit);
   React.useEffect(() => {
     set('keepaspect', fit !== 'stretch');
     set('panscan', fit === 'crop' ? 1 : 0);
@@ -195,12 +189,12 @@ export function useShellPlayer(opts: NativePlayerOptions): PlayerController {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fit]);
 
-  // Blu-ray and DVD subtitles keep their own size.
   const imageSubtitle = React.useRef(false);
-  // Changes made during playback, from the player's menu or the settings, show at once.
-  React.useEffect(() => {
-    applySubtitleStyle(opts.subtitleStyle, imageSubtitle.current);
-  }, [opts.subtitleStyle]);
+  const { subtitleStyle } = opts;
+  React.useEffect(
+    () => applySubtitleStyle(subtitleStyle, imageSubtitle.current),
+    [subtitleStyle]
+  );
 
   React.useEffect(() => {
     // mpv refuses anything above its volume-max.
@@ -210,7 +204,6 @@ export function useShellPlayer(opts: NativePlayerOptions): PlayerController {
 
     let fileTracks: MpvTrack[] = [];
     let sid: string | null = null;
-    imageSubtitle.current = false;
     const syncSubtitleScale = () => {
       const track = fileTracks.find(
         (t) => t.type === 'sub' && String(t.id) === sid
@@ -318,7 +311,6 @@ export function useShellPlayer(opts: NativePlayerOptions): PlayerController {
     set('pause', false);
     set('volume', Math.round(volume * 100));
     set('mute', muted);
-    applySubtitleStyle(latest.current.subtitleStyle);
     const delay = savedSubtitleDelay(source.Id);
     set('sub-delay', delay / 1000);
     patch({ subtitleDelayMs: delay });
@@ -438,14 +430,13 @@ function setProp(name: string, value: unknown) {
   window.aiostreamsDesktop?.send({ type: 'mpv-set-prop', name, value });
 }
 
-export function applySubtitleStyle(
+/** Image subtitles keep their own size. */
+function applySubtitleStyle(
   style: SubtitleStyle | undefined,
-  imageSubtitle = false
+  image: boolean
 ): void {
   if (!style) return;
-  setProp('sub-scale', imageSubtitle ? 1 : subtitleScale(style));
-  setProp('sub-pos', mpvSubtitlePosition(style));
-  setProp('sub-font', mpvSubtitleFont(style));
+  setProp('sub-scale', image ? 1 : subtitleScale(style));
   setProp('sub-bold', style.bold);
   setProp('sub-color', mpvColor(style.textColor));
   setProp('sub-outline-color', mpvColor(style.outlineColor));
@@ -459,15 +450,15 @@ export function applySubtitleStyle(
     style.backgroundOpacity > 0 ? 'background-box' : 'outline-and-shadow'
   );
   setProp('sub-ass-override', style.overrideStyled ? 'force' : 'scale');
+  setProp('sub-pos', 100 - style.position);
 }
 
-function applyDesktopSettings(settings: DesktopSettings): void {
-  setProp('hwdec', settings.hardwareDecoding ? 'auto-safe' : 'no');
-  setProp(
-    'audio-channels',
-    settings.audioChannels === 'auto' ? 'auto-safe' : settings.audioChannels
-  );
-  setProp('audio-spdif', settings.passthrough ? 'ac3,eac3,dts-hd,truehd' : '');
+function applyDesktopSettings(): void {
+  const { hardwareDecoding, audioChannels, passthrough } = settings.desktop;
+  const channels = audioChannels.read();
+  setProp('hwdec', hardwareDecoding.read() ? 'auto-safe' : 'no');
+  setProp('audio-channels', channels === 'auto' ? 'auto-safe' : channels);
+  setProp('audio-spdif', passthrough.read() ? 'ac3,eac3,dts-hd,truehd' : '');
 }
 
 export type UpdateState = Extract<ShellMessage, { type: 'update-state' }>;
@@ -539,18 +530,19 @@ function onContextMenu(e: MouseEvent) {
   e.preventDefault();
 }
 
-/** Keeps mpv in step with this device's settings, checks for updates, and handles Esc and right clicks. */
+let windowFullscreen = false;
+
+/** Keeps mpv in step with this device's settings, checks for updates, and handles right clicks. */
 export function ShellSetup() {
   React.useEffect(() => {
     const shell = window.aiostreamsDesktop;
     if (!shell) return;
-    let fullscreen = false;
-    let channel = readDesktopSettings().updateChannel;
+    const { updateChannel } = settings.desktop;
+    let channel = updateChannel.read();
     const apply = () => {
-      const settings = readDesktopSettings();
-      applyDesktopSettings(settings);
-      if (settings.updateChannel !== channel) {
-        channel = settings.updateChannel;
+      applyDesktopSettings();
+      if (updateChannel.read() !== channel) {
+        channel = updateChannel.read();
         checkForUpdates(channel);
       }
     };
@@ -558,22 +550,15 @@ export function ShellSetup() {
     checkForUpdates(channel);
     const unsubscribeSettings = onSettingsChange(apply);
     const unsubscribe = shell.subscribe((m) => {
-      if (m.type === 'fullscreen') fullscreen = m.value;
+      if (m.type === 'fullscreen') windowFullscreen = m.value;
       else if (m.type === 'update-state') onUpdateState(m);
       else if (m.type === 'discord-status') onDiscordStatus(m);
     });
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== 'Escape' || !fullscreen || e.defaultPrevented) return;
-      if (readDesktopSettings().escExitsFullscreen)
-        shell.send({ type: 'fullscreen', value: false });
-    };
-    window.addEventListener('keydown', onKey);
     window.addEventListener('contextmenu', onContextMenu);
     shell.send({ type: 'mpv-sync' });
     return () => {
       unsubscribeSettings();
       unsubscribe();
-      window.removeEventListener('keydown', onKey);
       window.removeEventListener('contextmenu', onContextMenu);
     };
   }, []);
@@ -636,4 +621,21 @@ export function requestDiagnostics(server: string | null): Promise<string> {
     });
     shell.send({ type: 'diagnostics', web: __APP_COMMIT__, server });
   });
+}
+
+const host: Host = {
+  name: 'desktop',
+  device: () => ({ name: window.aiostreamsDesktop?.device }),
+  usePlayer: useShellPlayer,
+  playerFeatures: ['audio', 'chapters', 'stats'],
+  back: () => {
+    if (!windowFullscreen) return false;
+    window.aiostreamsDesktop?.send({ type: 'fullscreen', value: false });
+    return true;
+  },
+};
+
+/** The AIOStreams desktop app, which plays in mpv. */
+export function shellHost(): Host | null {
+  return window.aiostreamsDesktop?.protocol === 1 ? host : null;
 }

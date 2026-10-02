@@ -87,7 +87,7 @@ function EpisodeRow({ item }: { item: BaseItemDto }) {
     >
       <div className="relative aspect-video w-28 flex-none overflow-hidden rounded-lg bg-gray-900">
         <Artwork
-          src={landscapeUrls(client, item, { maxWidth: 320 })}
+          src={(width) => landscapeUrls(client, item, { maxWidth: width })}
           alt={itemTitle(item)}
         />
       </div>
@@ -137,7 +137,7 @@ function DayCell({
         }
       }}
       className={cn(
-        'group/day relative flex h-40 min-w-0 flex-col justify-between overflow-hidden rounded-lg bg-white/[0.03] p-2 outline-none transition-colors focus-visible:ring-2 focus-visible:ring-white/50',
+        'group/day relative flex h-40 min-w-0 flex-col justify-between overflow-hidden rounded-lg bg-white/[0.03] p-2 transition-colors',
         items.length && 'cursor-pointer hover:bg-white/[0.05]',
         outside && 'opacity-30'
       )}
@@ -158,7 +158,9 @@ function DayCell({
               )}
             >
               <Artwork
-                src={landscapeUrls(client, item, { maxWidth: 480 })}
+                src={(width) =>
+                  landscapeUrls(client, item, { maxWidth: width })
+                }
                 alt=""
               />
             </div>

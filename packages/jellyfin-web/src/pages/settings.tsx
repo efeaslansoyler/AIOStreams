@@ -3,10 +3,12 @@ import { useQuery } from '@tanstack/react-query';
 import { toast } from 'sonner';
 import type { IconType } from 'react-icons';
 import {
+  LuAppWindow,
   LuCaptions,
   LuCirclePlay,
   LuHeart,
   LuInfo,
+  LuKeyboard,
   LuLayoutGrid,
   LuMonitor,
   LuPalette,
@@ -40,7 +42,7 @@ import { useSession } from '../lib/session';
 import { usePickableUsers, useViews } from '../lib/queries';
 import { libraryLabel } from '../lib/format';
 import { configureUrl } from '../lib/paths';
-import { playbackHost } from '../lib/hosts';
+import { currentHost } from '../lib/hosts';
 import {
   openLogs,
   openMpvConfig,
@@ -58,9 +60,9 @@ import {
 import { LANGUAGES } from '../lib/languages';
 import { serverAddress } from '../lib/servers';
 import {
-  installedFonts,
   subtitleCss,
   subtitleLine,
+  SUBTITLE_SIZE_LABELS,
 } from '../lib/subtitle-style';
 import { usePlaybackPrefs, type SubtitleMode } from '../lib/user-config';
 import {
@@ -70,54 +72,22 @@ import {
   setExternalPlayerTemplate,
 } from '../lib/playback';
 import {
+  settings,
+  useSetting,
   AUDIO_CHANNELS,
   CUSTOM_CSS_OFF,
   MAX_CUSTOM_CSS,
   MAX_FEATURED,
-  useCustomCss,
-  useThemeColors,
   NEXT_COUNTDOWNS,
   NEXT_LEADS,
   SEEK_STEPS,
+  VOLUME_STEPS,
   SEGMENT_ACTIONS,
   SEGMENT_TYPES,
-  useSegmentAction,
-  useAudioChannels,
-  useEpisodeLayout,
-  useEscExitsFullscreen,
-  useChapterSkips,
-  useCombineSearch,
-  useUpdateChannel,
-  useFeatured,
-  useHardwareDecoding,
-  useHeroMode,
-  useMergeNextUp,
-  useNextCountdown,
-  useNextFallbackFirst,
-  useNextLead,
-  useNextPrompt,
-  usePassthrough,
-  usePosterLines,
-  usePosterSize,
-  useSeekStep,
-  useAnyDiscordEvent,
-  useDiscordEvent,
   DISCORD_EVENTS,
   type DiscordEvent,
-  useSkipVersionList,
   SUBTITLE_POSITION_MAX,
-  SUBTITLE_SCALES,
-  useSubtitleBackgroundColor,
-  useSubtitleBold,
-  useSubtitleBackgroundOpacity,
-  useSubtitleOutline,
-  useSubtitleOutlineColor,
-  useSubtitleOverrideStyled,
-  useSubtitlePosition,
-  useSubtitleFont,
-  useSubtitleScale,
-  useSubtitleStyle,
-  useSubtitleTextColor,
+  SUBTITLE_SIZES,
   type AudioChannels,
   type EpisodeLayout,
   type HeroMode,
@@ -127,10 +97,12 @@ import {
   type SegmentAction,
   type SegmentType,
   type SubtitleOutline,
+  type SubtitleSize,
 } from '../lib/settings';
 import { useFeature, useServerInfo } from '../lib/server-info';
 import { PageBody } from '../components/layout';
 import { UserAvatar } from '../components/user-avatar';
+import { ShortcutSettings } from '../components/shortcut-settings';
 import {
   SettingsCard,
   SettingsPageHeader,
@@ -204,7 +176,7 @@ const SEGMENT_ACTION_LABELS: Record<SegmentAction, string> = {
 };
 
 function SegmentActionSelect({ type }: { type: SegmentType }) {
-  const [action, setAction] = useSegmentAction(type);
+  const [action, setAction] = useSetting(settings.segment[type]);
   return (
     <Select
       label={SEGMENT_LABELS[type]}
@@ -225,17 +197,23 @@ function SegmentActionSelect({ type }: { type: SegmentType }) {
 
 function PlaybackSection() {
   const { prefs, update } = usePlaybackPrefs();
-  const [seekStep, setSeekStep] = useSeekStep();
-  const [skipList, setSkipList] = useSkipVersionList();
-  const [nextPrompt, setNextPrompt] = useNextPrompt();
-  const [nextLead, setNextLead] = useNextLead();
-  const [nextCountdown, setNextCountdown] = useNextCountdown();
-  const [nextFallbackFirst, setNextFallbackFirst] = useNextFallbackFirst();
-  const [hardwareDecoding, setHardwareDecoding] = useHardwareDecoding();
-  const [escExits, setEscExits] = useEscExitsFullscreen();
-  const [chapterSkips, setChapterSkips] = useChapterSkips();
+  const [seekStep, setSeekStep] = useSetting(settings.seekStep);
+  const [volumeStep, setVolumeStep] = useSetting(settings.volumeStep);
+  const [skipList, setSkipList] = useSetting(settings.skipVersionList);
+  const [nextPrompt, setNextPrompt] = useSetting(settings.next.prompt);
+  const [nextLead, setNextLead] = useSetting(settings.next.lead);
+  const [nextCountdown, setNextCountdown] = useSetting(settings.next.countdown);
+  const [nextFallbackFirst, setNextFallbackFirst] = useSetting(
+    settings.next.fallbackFirst
+  );
+  const [hardwareDecoding, setHardwareDecoding] = useSetting(
+    settings.desktop.hardwareDecoding
+  );
+  const [chapterSkips, setChapterSkips] = useSetting(
+    settings.desktop.chapterSkips
+  );
   const bingeGroups = useFeature('versions');
-  const shell = playbackHost() === 'shell';
+  const shell = currentHost().name === 'desktop';
   const [template, setTemplate] = React.useState(externalPlayerTemplate);
   const [always, setAlways] = React.useState(externalAlways);
   const changeTemplate = (value: string) => {
@@ -359,14 +337,16 @@ function PlaybackSection() {
           value={String(seekStep)}
           onValueChange={(v) => setSeekStep(Number(v))}
         />
-        {shell && (
-          <Switch
-            side="right"
-            label="Esc leaves full screen"
-            value={escExits}
-            onValueChange={setEscExits}
-          />
-        )}
+        <Select
+          label="Volume step"
+          help="How much the volume keys and the scroll wheel change the volume."
+          options={VOLUME_STEPS.map((s) => ({
+            value: String(s),
+            label: `${s}%`,
+          }))}
+          value={String(volumeStep)}
+          onValueChange={(v) => setVolumeStep(Number(v))}
+        />
       </SettingsCard>
       {shell && (
         <SettingsCard title="Video" description={ON_DEVICE}>
@@ -426,8 +406,12 @@ function PlaybackSection() {
 
 function AudioSection() {
   const { prefs, update } = usePlaybackPrefs();
-  const [audioChannels, setAudioChannels] = useAudioChannels();
-  const [passthrough, setPassthrough] = usePassthrough();
+  const [audioChannels, setAudioChannels] = useSetting(
+    settings.desktop.audioChannels
+  );
+  const [passthrough, setPassthrough] = useSetting(
+    settings.desktop.passthrough
+  );
   return (
     <>
       <SettingsCard title="Language" description={ON_ACCOUNT}>
@@ -441,7 +425,7 @@ function AudioSection() {
           }
         />
       </SettingsCard>
-      {playbackHost() === 'shell' && (
+      {currentHost().name === 'desktop' && (
         <SettingsCard title="Output" description={ON_DEVICE}>
           <Select
             label="Channels"
@@ -466,53 +450,27 @@ function AudioSection() {
   );
 }
 
-const DEFAULT_FONT = '__default__';
-
-/**
- * The fonts installed on this computer, fonts added later included. Reading
- * them can need a click the first time, so opening the list tries again.
- */
-function SubtitleFontSelect() {
-  const [font, setFont] = useSubtitleFont();
-  const [fonts, setFonts] = React.useState<string[]>([]);
-  const load = React.useCallback(() => {
-    installedFonts()
-      .then((found) => found.length && setFonts(found))
-      .catch(() => {});
-  }, []);
-  React.useEffect(load, [load]);
-  if (!('queryLocalFonts' in window)) return null;
-  const families = font && !fonts.includes(font) ? [font, ...fonts] : fonts;
-  return (
-    <Select
-      label="Font"
-      help="Any font installed on this computer."
-      options={[
-        { value: DEFAULT_FONT, label: 'Default' },
-        ...families.map((f) => ({ value: f, label: f })),
-      ]}
-      position="popper"
-      value={font || DEFAULT_FONT}
-      onValueChange={(v) => setFont(v === DEFAULT_FONT ? '' : v)}
-      onOpenChange={(open) => open && !fonts.length && load()}
-    />
-  );
-}
-
 function SubtitlesSection() {
   const { prefs, update } = usePlaybackPrefs();
   const mode = prefs.SubtitleMode ?? 'Default';
-  const [scale, setScale] = useSubtitleScale();
-  const [position, setPosition] = useSubtitlePosition();
-  const [bold, setBold] = useSubtitleBold();
-  const [textColor, setTextColor] = useSubtitleTextColor();
-  const [outline, setOutline] = useSubtitleOutline();
-  const [outlineColor, setOutlineColor] = useSubtitleOutlineColor();
-  const [backgroundColor, setBackgroundColor] = useSubtitleBackgroundColor();
-  const [backgroundOpacity, setBackgroundOpacity] =
-    useSubtitleBackgroundOpacity();
-  const [overrideStyled, setOverrideStyled] = useSubtitleOverrideStyled();
-  const style = useSubtitleStyle();
+  const [size, setSize] = useSetting(settings.subtitle.size);
+  const [bold, setBold] = useSetting(settings.subtitle.bold);
+  const [textColor, setTextColor] = useSetting(settings.subtitle.textColor);
+  const [outline, setOutline] = useSetting(settings.subtitle.outline);
+  const [outlineColor, setOutlineColor] = useSetting(
+    settings.subtitle.outlineColor
+  );
+  const [backgroundColor, setBackgroundColor] = useSetting(
+    settings.subtitle.backgroundColor
+  );
+  const [backgroundOpacity, setBackgroundOpacity] = useSetting(
+    settings.subtitle.backgroundOpacity
+  );
+  const [overrideStyled, setOverrideStyled] = useSetting(
+    settings.subtitle.overrideStyled
+  );
+  const [position, setPosition] = useSetting(settings.subtitle.position);
+  const [style] = useSetting(settings.subtitleStyle);
   const css = subtitleCss(style);
   return (
     <>
@@ -546,23 +504,13 @@ function SubtitlesSection() {
       <SettingsCard title="Text" description={ON_DEVICE}>
         <Select
           label="Size"
-          options={SUBTITLE_SCALES.map((v) => ({
-            value: String(v),
-            label: v === 100 ? '100% (Normal)' : `${v}%`,
+          options={SUBTITLE_SIZES.map((value) => ({
+            value,
+            label: SUBTITLE_SIZE_LABELS[value],
           }))}
-          value={String(scale)}
-          onValueChange={(v) => setScale(Number(v))}
+          value={size}
+          onValueChange={(v) => setSize(v as SubtitleSize)}
         />
-        <Slider
-          label={`Raise: ${position}%`}
-          help="How far subtitles sit above their usual place near the bottom."
-          min={0}
-          max={SUBTITLE_POSITION_MAX}
-          step={1}
-          value={[position]}
-          onValueChange={([v]) => setPosition(v)}
-        />
-        <SubtitleFontSelect />
         <ColorInput
           label="Colour"
           value={textColor}
@@ -573,6 +521,15 @@ function SubtitlesSection() {
           label="Bold"
           value={bold}
           onValueChange={setBold}
+        />
+        <Slider
+          label={`Height: ${position}%`}
+          help="How far subtitles sit above their usual place near the bottom."
+          min={0}
+          max={SUBTITLE_POSITION_MAX}
+          step={1}
+          value={[position]}
+          onValueChange={([v]) => setPosition(v)}
         />
       </SettingsCard>
       <SettingsCard title="Outline">
@@ -649,7 +606,7 @@ function updateStatus(update: UpdateState | null): string {
 }
 
 function UpdatesCard() {
-  const [setting, setSetting] = useUpdateChannel();
+  const [setting, setSetting] = useSetting(settings.desktop.updateChannel);
   const update = useUpdateState();
   const channel =
     setting === 'installed' ? (update?.channel ?? 'stable') : setting;
@@ -721,7 +678,7 @@ function discordStatus(status: DiscordStatus | null): string {
 }
 
 function DiscordEventSwitch({ event }: { event: DiscordEvent }) {
-  const [value, setValue] = useDiscordEvent(event);
+  const [value, setValue] = useSetting(settings.discord[event]);
   const { label, help } = DISCORD_LABELS[event];
   return (
     <Switch
@@ -735,7 +692,8 @@ function DiscordEventSwitch({ event }: { event: DiscordEvent }) {
 }
 
 function DiscordCard() {
-  const any = useAnyDiscordEvent();
+  const [events] = useSetting(settings.discordEvents);
+  const any = Object.values(events).some(Boolean);
   const status = useDiscordStatus();
   React.useEffect(() => {
     if (any) checkDiscord();
@@ -759,6 +717,23 @@ function DiscordCard() {
           </Button>
         </SettingsRow>
       )}
+    </SettingsCard>
+  );
+}
+
+function AppSection() {
+  const app = currentHost().settings;
+  return (
+    <SettingsCard>
+      <SettingsRow label="App settings" help={app?.help}>
+        <Button
+          intent="gray-outline"
+          className="w-full rounded-full sm:w-auto"
+          onClick={app?.open}
+        >
+          Open
+        </Button>
+      </SettingsRow>
     </SettingsCard>
   );
 }
@@ -828,13 +803,13 @@ const NOTHING = 'none';
 
 function InterfaceSection() {
   const views = useViews();
-  const [featured, setFeatured] = useFeatured();
-  const [heroMode, setHeroMode] = useHeroMode();
-  const [mergeNextUp, setMergeNextUp] = useMergeNextUp();
-  const [combineSearch, setCombineSearch] = useCombineSearch();
-  const [posterSize, setPosterSize] = usePosterSize();
-  const [posterLines, setPosterLines] = usePosterLines();
-  const [episodeLayout, setEpisodeLayout] = useEpisodeLayout();
+  const [featured, setFeatured] = useSetting(settings.featured);
+  const [heroMode, setHeroMode] = useSetting(settings.heroMode);
+  const [mergeNextUp, setMergeNextUp] = useSetting(settings.mergeNextUp);
+  const [combineSearch, setCombineSearch] = useSetting(settings.combineSearch);
+  const [posterSize, setPosterSize] = useSetting(settings.posterSize);
+  const [posterLines, setPosterLines] = useSetting(settings.posterLines);
+  const [episodeLayout, setEpisodeLayout] = useSetting(settings.episodeLayout);
 
   const featuredOptions = [
     {
@@ -957,8 +932,8 @@ const DOCS_URL = 'https://docs.aiostreams.viren070.me';
 const CSS_DOCS_URL = `${DOCS_URL}/reference/web-app-css`;
 
 function ThemeSection() {
-  const [colors, setColors] = useThemeColors();
-  const [css, setCss] = useCustomCss();
+  const [colors, setColors] = useSetting(settings.themeColors);
+  const [css, setCss] = useSetting(settings.customCss);
   const [draft, setDraft] = React.useState(css);
   const accent = colors.accent ?? DEFAULT_ACCENT;
   const background = colors.background ?? DEFAULT_BACKGROUND;
@@ -1254,7 +1229,7 @@ function AboutSection() {
             </span>
           </SettingsRow>
         ))}
-        {playbackHost() === 'browser' && (
+        {currentHost().name === 'browser' && (
           <SettingsRow
             label="Desktop app"
             help="This web app with a player of its own, which plays what a browser can't, on Windows, Mac and Linux."
@@ -1349,6 +1324,7 @@ interface Section {
 }
 
 function sections(): Section[] {
+  const host = currentHost();
   return [
     {
       id: 'playback',
@@ -1361,8 +1337,7 @@ function sections(): Section[] {
     {
       id: 'audio',
       label: 'Audio',
-      description:
-        playbackHost() === 'shell' ? 'Language and output' : 'Language',
+      description: host.name === 'desktop' ? 'Language and output' : 'Language',
       icon: LuVolume2,
       group: 'Watching',
       Content: AudioSection,
@@ -1383,6 +1358,19 @@ function sections(): Section[] {
       group: 'App',
       Content: InterfaceSection,
     },
+    // A touch screen has no keys to set.
+    ...(matchMedia('(pointer: coarse)').matches
+      ? []
+      : [
+          {
+            id: 'shortcuts',
+            label: 'Shortcuts',
+            description: 'Keys, remotes and gamepads',
+            icon: LuKeyboard,
+            group: 'App',
+            Content: ShortcutSettings,
+          },
+        ]),
     {
       id: 'theme',
       label: 'Theme',
@@ -1399,7 +1387,7 @@ function sections(): Section[] {
       group: 'App',
       Content: AccountSection,
     },
-    ...(playbackHost() === 'shell'
+    ...(host.name === 'desktop'
       ? [
           {
             id: 'desktop',
@@ -1408,6 +1396,18 @@ function sections(): Section[] {
             icon: LuMonitor,
             group: 'App',
             Content: DesktopSection,
+          },
+        ]
+      : []),
+    ...(host.settings
+      ? [
+          {
+            id: 'app',
+            label: host.settings.label,
+            description: host.settings.description,
+            icon: LuAppWindow,
+            group: 'App',
+            Content: AppSection,
           },
         ]
       : []),
@@ -1491,6 +1491,7 @@ export function SettingsPage({
             <TabsContent
               key={s.id}
               value={s.id}
+              tabIndex={-1}
               data-name={s.id}
               className="space-y-6 duration-300 animate-in fade-in-0 slide-in-from-bottom-2"
             >
