@@ -1,11 +1,10 @@
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void};
 use std::io::{Read, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use aiostreams_desktop_core::mpv::Mpv;
@@ -312,50 +311,64 @@ pub fn mpv_options(_video: &VideoSurface) -> Vec<(&'static str, String)> {
     vec![("vo", "libmpv".into()), ("hwdec", "auto-safe".into())]
 }
 
-const INHIBIT_IDLE: u32 = 8;
+struct Awake {
+    app: gtk4::Application,
+    window: gtk4::Window,
+    cookie: Option<u32>,
+}
 
-/// The portal's handle for the running inhibition, which closing ends.
-static AWAKE: Mutex<Option<String>> = Mutex::new(None);
+thread_local! {
+    static AWAKE: RefCell<Option<Awake>> = const { RefCell::new(None) };
+}
+
+/// Lets `keep_awake` hold the window's surface awake. GTK does that through the
+/// compositor's idle-inhibit protocol, which idle daemons follow, but only for
+/// a window of a registered `GtkApplication`; the portal's Inhibit reaches no
+/// one outside GNOME and KDE. Call on the GTK thread.
+pub fn awake_window(window: &gtk4::Window) {
+    let app = gtk4::Application::builder()
+        .application_id("io.github.viren070.aiostreams")
+        .flags(gio::ApplicationFlags::NON_UNIQUE)
+        .build();
+    if let Err(e) = app.register(None::<&gio::Cancellable>) {
+        return log::warn!("keep awake: {e}");
+    }
+    window.set_application(Some(&app));
+    AWAKE.with(|a| {
+        *a.borrow_mut() = Some(Awake {
+            app,
+            window: window.clone(),
+            cookie: None,
+        })
+    });
+}
 
 pub fn keep_awake(on: bool) {
-    let Ok(mut held) = AWAKE.lock() else { return };
-    if on == held.is_some() {
-        return;
-    }
-    let result =
-        gio::bus_get_sync(gio::BusType::Session, None::<&gio::Cancellable>).and_then(|bus| {
-            let call = |path: &str, interface, method, args: Option<glib::Variant>| {
-                bus.call_sync(
-                    Some("org.freedesktop.portal.Desktop"),
-                    path,
-                    interface,
-                    method,
-                    args.as_ref(),
-                    None,
-                    gio::DBusCallFlags::NONE,
-                    2000,
-                    None::<&gio::Cancellable>,
-                )
-            };
-            match held.take() {
-                Some(handle) => call(&handle, "org.freedesktop.portal.Request", "Close", None),
-                None => {
-                    let args =
-                        ("", INHIBIT_IDLE, HashMap::<String, glib::Variant>::new()).to_variant();
-                    let reply = call(
-                        "/org/freedesktop/portal/desktop",
-                        "org.freedesktop.portal.Inhibit",
-                        "Inhibit",
-                        Some(args),
-                    )?;
-                    *held = reply.child_value(0).str().map(String::from);
-                    Ok(reply)
+    glib::MainContext::default().invoke(move || {
+        AWAKE.with(|a| {
+            let mut held = a.borrow_mut();
+            let Some(awake) = held.as_mut() else { return };
+            match (on, awake.cookie) {
+                (true, None) => {
+                    let cookie = awake.app.inhibit(
+                        Some(&awake.window),
+                        gtk4::ApplicationInhibitFlags::IDLE,
+                        Some("Playing a video"),
+                    );
+                    if cookie == 0 {
+                        log::warn!("keep awake: refused");
+                    } else {
+                        awake.cookie = Some(cookie);
+                    }
                 }
+                (false, Some(cookie)) => {
+                    awake.app.uninhibit(cookie);
+                    awake.cookie = None;
+                }
+                _ => {}
             }
-        });
-    if let Err(e) = result {
-        log::warn!("keep awake: {e}");
-    }
+        })
+    });
 }
 
 pub fn open_external(url: &str) {
