@@ -47,7 +47,9 @@ import {
   seasonAnimeIds,
   userDataFromRow,
   watchRowEpisode,
+  watchRowsAndAirTimesFor,
   watchRowsFor,
+  withTrackerAirTime,
   writeMemoPointer,
   type ContentDescriptor,
   type ContentRef,
@@ -115,6 +117,17 @@ async function airedEpisodesOf(
     ? showEpisodesOf(meta)
     : await rememberedShowEpisodes(ctx.scope(), d.t, d.i);
   return show ? airedEpisodeRefs(show, now) : undefined;
+}
+
+/** Whether every aired episode is played, from an episode list that can lag the meta. */
+export async function caughtUpOn(
+  ctx: JellyfinRequestContext,
+  d: { t: string; i: string }
+): Promise<boolean> {
+  const aired = await airedEpisodesOf(ctx, d, Date.now());
+  if (!aired?.length) return false;
+  const rows = await watchRowsFor(ctx.watch, aired);
+  return aired.every((ref) => rows.get(itemKeyFor(ref))?.played);
 }
 
 /** Batched user data for every content item in a list. */
@@ -605,12 +618,16 @@ async function watchingPosition(
     .filter((g) => g.season !== 0)
     .flatMap((g) => g.videos.map((v) => ({ g, v })));
   const refs = pairs.map(({ g, v }) => episodeRef(meta, g, v));
-  const states = await watchRowsFor(ctx.watch, refs);
-  const eps: EpisodeSlot[] = pairs.map(({ g, v }, i) => ({
-    group: g,
-    video: v,
-    row: states.get(itemKeyFor(refs[i])),
-  }));
+  const { rows, airTimes } = await watchRowsAndAirTimesFor(ctx.watch, refs);
+  const eps: EpisodeSlot[] = pairs.map(({ g, v }, i) => {
+    const key = itemKeyFor(refs[i]);
+    const airsAt = airTimes.get(key);
+    return {
+      group: g,
+      video: airsAt == null ? v : withTrackerAirTime(v, airsAt),
+      row: rows.get(key),
+    };
+  });
   let seriesItem: JellyfinItem | undefined;
   const build = (slot: EpisodeSlot) =>
     buildEpisode(

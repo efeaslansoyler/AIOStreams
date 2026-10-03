@@ -200,6 +200,9 @@ export interface WatchHistoryCounts {
 /** A row that is part of the history: finished, or part-way through. */
 const WATCHED = raw('(played = 1 OR position_ms > 0)');
 
+/** The item a row is one spelling of. */
+const ITEM = raw('COALESCE(match_key, item_key)');
+
 /** What outlives the history being cleared or aged out. */
 const KEPT = raw(
   '(favorite = 1 OR dropped = 1 OR rating IS NOT NULL OR likes IS NOT NULL)'
@@ -531,16 +534,14 @@ export class WatchStateRepository {
    * moves to the id its match key names when the show has rows there, since
    * that id covers every season.
    */
-  static async listRecentSeries(
+  static async *recentSeries(
     scope: WatchScope,
-    limit: number
-  ): Promise<WatchStateRow[]> {
+    page: number
+  ): AsyncGenerator<WatchStateRow> {
     const where = sql`uuid = ${scope.uuid} AND persona = ${scope.persona}
       AND series_key IS NOT NULL AND episode IS NOT NULL AND ${WATCHED}`;
-    const page = limit * 2;
-    const out: WatchStateRow[] = [];
     const shown = new Set<string>();
-    for (let offset = 0; out.length < limit; offset += page) {
+    for (let offset = 0; ; offset += page) {
       // Picks the series first, so only their rows are ranked, not the history.
       const latest = await getDb().query<{
         series_key: string;
@@ -552,7 +553,7 @@ export class WatchStateRepository {
              ORDER BY at DESC, series_key
              LIMIT ${page} OFFSET ${offset}`
       );
-      if (!latest.length) break;
+      if (!latest.length) return;
       const lastAt = new Map(latest.map((l) => [l.series_key, Number(l.at)]));
       const anchors = join(
         latest.map(
@@ -596,10 +597,20 @@ export class WatchStateRepository {
         if (shown.has(show)) continue;
         shown.add(show);
         const whole = bySeries.get(show);
-        out.push(whole && whole !== row ? underShow(row, whole) : row);
-        if (out.length >= limit) break;
+        yield whole && whole !== row ? underShow(row, whole) : row;
       }
-      if (latest.length < page) break;
+      if (latest.length < page) return;
+    }
+  }
+
+  static async listRecentSeries(
+    scope: WatchScope,
+    limit: number
+  ): Promise<WatchStateRow[]> {
+    const out: WatchStateRow[] = [];
+    for await (const row of this.recentSeries(scope, limit * 2)) {
+      out.push(row);
+      if (out.length >= limit) break;
     }
     return out;
   }
@@ -673,7 +684,11 @@ export class WatchStateRepository {
     return rows.map(toRow).filter((r) => r.episode != null);
   }
 
-  /** One page of the histories of `personas`, newest first. */
+  /**
+   * One page of the histories of `personas`, newest first. An item held under
+   * several spellings is listed once, by its newest row; on a tie a local one,
+   * then the one under its preferred id.
+   */
   static async listHistory(
     uuid: string,
     personas: string[],
@@ -682,16 +697,37 @@ export class WatchStateRepository {
     if (!personas.length) return [];
     const c = opts.after;
     const after = c
-      ? sql`AND (sort_at < ${c.sortAt} OR (sort_at = ${c.sortAt} AND (persona > ${c.persona} OR (persona = ${c.persona} AND item_key < ${c.itemKey}))))`
+      ? sql`AND (w.sort_at < ${c.sortAt} OR (w.sort_at = ${c.sortAt} AND (w.persona > ${c.persona} OR (w.persona = ${c.persona} AND w.item_key < ${c.itemKey}))))`
       : raw('');
+    const listed = (t: string) =>
+      raw(
+        `(${t}.played = 1 OR ${t}.position_ms > 0)${opts.localOnly ? ` AND ${t}.origin = 'local'` : ''}`
+      );
+    // A total order, so every page agrees on which spelling stands for the item.
+    const outranked = raw(`(s.sort_at > w.sort_at
+      OR (s.sort_at = w.sort_at AND s.origin = 'local' AND w.origin <> 'local')
+      OR (s.sort_at = w.sort_at AND s.origin = w.origin
+          AND w.item_key <> COALESCE(w.match_key, w.item_key)
+          AND (s.item_key = COALESCE(w.match_key, w.item_key)
+               OR s.item_key > w.item_key)))`);
+    const sibling = sql`s.uuid = w.uuid AND s.persona = w.persona
+      AND ${listed('s')} AND ${outranked}`;
+    // Two branches, not an OR: SQLite only uses both indexes this way.
     const rows = await getDb().query<DbRow>(
-      sql`SELECT * FROM watch_state
-           WHERE uuid = ${uuid}
-             AND persona IN (${join(personas.map((p) => sql`${p}`))})
-             AND ${WATCHED}
-             ${opts.localOnly ? raw("AND origin = 'local'") : raw('')}
+      sql`SELECT w.* FROM watch_state w
+           WHERE w.uuid = ${uuid}
+             AND w.persona IN (${join(personas.map((p) => sql`${p}`))})
+             AND ${listed('w')}
              ${after}
-           ORDER BY sort_at DESC, persona ASC, item_key DESC
+             AND NOT EXISTS (
+               SELECT 1 FROM watch_state s
+                WHERE ${sibling}
+                  AND s.match_key = COALESCE(w.match_key, w.item_key))
+             AND NOT EXISTS (
+               SELECT 1 FROM watch_state s
+                WHERE ${sibling} AND s.match_key IS NULL
+                  AND s.item_key = COALESCE(w.match_key, w.item_key))
+           ORDER BY w.sort_at DESC, w.persona ASC, w.item_key DESC
            LIMIT ${opts.limit}`
     );
     return rows.map(toRow);
@@ -730,10 +766,10 @@ export class WatchStateRepository {
       last_at: number | string | null;
     }>(
       sql`SELECT persona,
-                 SUM(CASE WHEN played = 1 THEN 1 ELSE 0 END) AS played,
-                 SUM(CASE WHEN played = 1 AND kind = 'movie' THEN 1 ELSE 0 END) AS movies,
-                 SUM(CASE WHEN played = 1 AND kind = 'episode' THEN 1 ELSE 0 END) AS episodes,
-                 SUM(CASE WHEN played = 0 AND position_ms > 0 THEN 1 ELSE 0 END) AS in_progress,
+                 COUNT(DISTINCT CASE WHEN played = 1 THEN ${ITEM} END) AS played,
+                 COUNT(DISTINCT CASE WHEN played = 1 AND kind = 'movie' THEN ${ITEM} END) AS movies,
+                 COUNT(DISTINCT CASE WHEN played = 1 AND kind = 'episode' THEN ${ITEM} END) AS episodes,
+                 COUNT(DISTINCT CASE WHEN played = 0 AND position_ms > 0 THEN ${ITEM} END) AS in_progress,
                  SUM(CASE WHEN favorite = 1 THEN 1 ELSE 0 END) AS favorites,
                  MAX(CASE WHEN ${WATCHED} THEN sort_at END) AS last_at
             FROM watch_state
@@ -749,6 +785,33 @@ export class WatchStateRepository {
       favorites: Number(r.favorites ?? 0),
       lastAt: optionalNumber(r.last_at),
     }));
+  }
+
+  /** `itemKeys` and the keys of every other spelling of the same items. */
+  static async withSpellings(
+    scope: WatchScope,
+    itemKeys: string[]
+  ): Promise<string[]> {
+    const out = new Set(itemKeys);
+    const wanted = [...out].filter(Boolean);
+    const owner = sql`uuid = ${scope.uuid} AND persona = ${scope.persona}`;
+    for (let i = 0; i < wanted.length; i += CHUNK) {
+      const list = join(wanted.slice(i, i + CHUNK).map((k) => sql`${k}`));
+      const items = await getDb().query<{ item: string }>(
+        sql`SELECT DISTINCT ${ITEM} AS item FROM watch_state
+             WHERE ${owner} AND item_key IN (${list})`
+      );
+      if (!items.length) continue;
+      const of = join(items.map((r) => sql`${r.item}`));
+      const rows = await getDb().query<{ item_key: string }>(
+        sql`SELECT item_key FROM watch_state WHERE ${owner} AND match_key IN (${of})
+            UNION
+            SELECT item_key FROM watch_state
+             WHERE ${owner} AND match_key IS NULL AND item_key IN (${of})`
+      );
+      for (const r of rows) out.add(r.item_key);
+    }
+    return [...out];
   }
 
   static async clearPlayback(

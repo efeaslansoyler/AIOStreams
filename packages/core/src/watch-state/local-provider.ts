@@ -53,6 +53,10 @@ export class LocalWatchStateProvider implements WatchStateProvider {
     return WatchStateRepository.listRecentSeries(scope, limit);
   }
 
+  recentSeries(scope: WatchScope, page: number) {
+    return WatchStateRepository.recentSeries(scope, page);
+  }
+
   listFavorites(scope: WatchScope, kinds?: WatchKind[]) {
     return WatchStateRepository.listFavorites(scope, kinds);
   }
@@ -166,13 +170,17 @@ export class LocalWatchStateProvider implements WatchStateProvider {
   }
 
   async clear(scope: WatchScope, itemKeys?: string[]): Promise<number> {
+    // Every spelling goes, or the history would list the next one in its place.
+    const keys = itemKeys
+      ? await WatchStateRepository.withSpellings(scope, itemKeys)
+      : undefined;
     const prefix = `${scope.uuid}|${scope.persona}|`;
-    const only = itemKeys ? new Set(itemKeys) : null;
+    const only = keys ? new Set(keys) : null;
     for (const key of this.pending.keys()) {
       if (!key.startsWith(prefix)) continue;
       if (!only || only.has(key.slice(prefix.length))) this.pending.delete(key);
     }
-    const cleared = await WatchStateRepository.clearPlayback(scope, itemKeys);
+    const cleared = await WatchStateRepository.clearPlayback(scope, keys);
     if (cleared.length) {
       this.notify(
         scope,
