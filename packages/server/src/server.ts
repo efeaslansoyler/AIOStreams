@@ -50,11 +50,13 @@ import {
   runLibraryRecheck,
   runUsenetArrQueueCleanup,
   requeueInterruptedInspects,
+  backfillProxiedNzbAliases,
   flushAllDiskCaches,
   ReleaseBlocklistRemoteService,
   ReleaseBlocklistPublishService,
   flushStreamSessions,
   pruneStreamSessions,
+  pruneMediaInfoProbes,
   recoverStreamSessions,
   streamRegistry,
 } from '@aiostreams/core';
@@ -151,6 +153,26 @@ function registerCacheTasks() {
 const USENET_METRICS_RETENTION_DAYS = 400;
 
 function registerUsenetTasks() {
+  TaskManager.register({
+    id: 'usenet-proxied-aliases',
+    label: 'Alias proxied NZBs by their source',
+    description:
+      'Keys library entries added through the NZB proxy by the URL behind it, ' +
+      'so they keep matching after the proxy credential changes. Runs at ' +
+      'startup until it has succeeded once.',
+    category: 'usenet',
+    kind: 'manual',
+    enabled: true,
+    destructive: false,
+    multiReplica: 'single',
+    run: async () => {
+      const { proxied, added } = await backfillProxiedNzbAliases();
+      return {
+        ok: true,
+        message: `${added} aliases added for ${proxied} proxied nzbs`,
+      };
+    },
+  });
   TaskManager.register({
     id: 'usenet-metrics-drain',
     label: 'Flush usenet provider metrics',
@@ -254,6 +276,21 @@ function registerStreamTasks() {
     run: async () => {
       const n = await pruneStreamSessions();
       return { ok: true, message: `pruned ${n} rows` };
+    },
+  });
+  TaskManager.register({
+    id: 'media-info-probes-prune',
+    label: 'Prune media info probes',
+    description: 'Deletes probe attempts older than 30 days.',
+    category: 'data-sync',
+    kind: 'scheduled',
+    intervalMs: 24 * 60 * 60_000,
+    enabled: true,
+    destructive: false,
+    multiReplica: 'single',
+    run: async () => {
+      const { deleted } = await pruneMediaInfoProbes();
+      return { ok: true, message: `pruned ${deleted} rows` };
     },
   });
 }
@@ -382,6 +419,11 @@ async function start() {
       logger.warn('Failed to recover orphaned stream sessions:', error)
     );
     void requeueInterruptedInspects();
+    void TaskManager.hasSucceeded('usenet-proxied-aliases')
+      .then((done) =>
+        done ? undefined : TaskManager.runNow('usenet-proxied-aliases')
+      )
+      .catch((error) => logger.warn('Failed to alias proxied nzbs:', error));
     await initialiseAuth();
     startAnalytics();
     await startNfsShare();

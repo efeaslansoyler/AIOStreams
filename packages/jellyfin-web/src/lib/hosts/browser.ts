@@ -1,47 +1,31 @@
 import React from 'react';
 import { storage } from '../storage';
-import { subtitleUrl, textSubtitles } from '../subtitles/tracks';
+import {
+  preferredSubtitle,
+  subtitleUrl,
+  textSubtitles,
+} from '../subtitles/tracks';
 import { sameLanguage } from '../languages';
-import type { PlaybackPrefs } from '../user-config';
 import { currentHost } from '.';
 import {
   clampDelay,
   savedSubtitleDelay,
   saveSubtitleDelay,
 } from '../subtitles/delay';
-import type { MediaStream } from '../types';
 import { checkSubtitleFile, readSubtitleCues } from '../subtitles/files';
 import { subtitleLine } from '../subtitles/style';
 import {
   initialState,
+  ownTrackLabel,
   storedVolume,
   trackLabel,
   VOLUME_KEY,
   type PlayerController,
   type PlayerOptions,
   type PlayerState,
+  type Track,
 } from '../playback/controller';
 import { useLatest } from '../use-latest';
-
-/** The text subtitle the user's language and subtitle mode start with. */
-function preferredSubtitle(
-  subtitles: MediaStream[],
-  prefs: PlaybackPrefs
-): MediaStream | undefined {
-  const lang = prefs.SubtitleLanguagePreference;
-  switch (prefs.SubtitleMode) {
-    case 'None':
-      return undefined;
-    case 'OnlyForced':
-      return subtitles.find(
-        (s) => s.IsForced && (!lang || sameLanguage(lang, s.Language))
-      );
-    default:
-      return lang
-        ? subtitles.find((s) => sameLanguage(lang, s.Language))
-        : undefined;
-  }
-}
 
 function isPhone(): boolean {
   return (
@@ -91,6 +75,24 @@ export function usePhoneFullscreen(enabled: boolean): void {
 
 const SUBTITLE_TYPES = ['srt', 'vtt', 'ass', 'ssa'];
 
+interface AudioTrack {
+  enabled: boolean;
+  label: string;
+  language: string;
+}
+
+interface AudioTrackList extends EventTarget {
+  readonly length: number;
+  [index: number]: AudioTrack;
+}
+
+function audioTrackList(video: HTMLVideoElement | null) {
+  return (video as { audioTracks?: AudioTrackList } | null)?.audioTracks;
+}
+
+const listed = (list: AudioTrackList) =>
+  Array.from({ length: list.length }, (_, i) => list[i]);
+
 interface FileTrack {
   id: string;
   label: string;
@@ -115,6 +117,7 @@ export function useBrowserPlayer(
   const subtitles = React.useMemo(() => textSubtitles(source), [source]);
   const files = React.useRef<FileTrack[]>([]);
   const [fileList, setFileList] = React.useState<FileTrack[]>([]);
+  const [audioTracks, setAudioTracks] = React.useState<Track[]>([]);
   const patch = (next: Partial<PlayerState>) =>
     setState((s) => ({ ...s, ...next }));
   // A text track's cues load late, so each one remembers the shift it has.
@@ -164,6 +167,12 @@ export function useBrowserPlayer(
     shiftCues();
     patch({ subtitle: id });
   };
+  const showAudio = (id: string) => {
+    const list = audioTrackList(video.current);
+    if (!list) return;
+    listed(list).forEach((t, i) => (t.enabled = String(i) === id));
+    patch({ audio: id });
+  };
 
   React.useEffect(() => {
     const el = video.current;
@@ -178,12 +187,31 @@ export function useBrowserPlayer(
       }
       return 0;
     };
+    const audio = audioTrackList(el);
+    const listAudio = () => {
+      if (!audio) return;
+      const tracks = listed(audio);
+      setAudioTracks(
+        tracks.map((t, i) => ({
+          id: String(i),
+          label: ownTrackLabel(t.label, t.language, i + 1),
+          lang: t.language,
+        }))
+      );
+      const on = tracks.findIndex((t) => t.enabled);
+      patch({ audio: on < 0 ? null : String(on) });
+    };
     const handlers: Record<string, () => void> = {
       loadedmetadata: () => {
         if (startMs) el.currentTime = startMs / 1000;
         patch({ durationMs: el.duration * 1000 || 0 });
         const first = preferredSubtitle(subtitles, prefs.current ?? {});
         if (first) showSubtitle(String(first.Index));
+        const lang = prefs.current?.AudioLanguagePreference;
+        const preferred = audio
+          ? listed(audio).findIndex((t) => sameLanguage(lang, t.language))
+          : -1;
+        if (preferred >= 0) showAudio(String(preferred));
       },
       durationchange: () => patch({ durationMs: el.duration * 1000 || 0 }),
       playing: () => patch({ started: true, paused: false, waiting: false }),
@@ -208,6 +236,9 @@ export function useBrowserPlayer(
     };
     for (const [event, handler] of Object.entries(handlers))
       el.addEventListener(event, handler);
+    const audioEvents = ['addtrack', 'removetrack', 'change'];
+    for (const event of audioEvents) audio?.addEventListener(event, listAudio);
+    listAudio();
     const trackElements = Array.from(el.querySelectorAll('track'));
     const onTrackLoad = () => {
       latestPlaceCues.current();
@@ -221,6 +252,8 @@ export function useBrowserPlayer(
         el.removeEventListener(event, handler);
       document.removeEventListener('fullscreenchange', onFullscreen);
       for (const t of trackElements) t.removeEventListener('load', onTrackLoad);
+      for (const event of audioEvents)
+        audio?.removeEventListener(event, listAudio);
     };
   }, [video, startMs, onEnded]);
 
@@ -238,11 +271,12 @@ export function useBrowserPlayer(
   const el = () => video.current;
   return {
     state,
-    audioTracks: [],
+    audioTracks,
     subtitleTracks: [
       ...subtitles.map((s, i) => ({
         id: String(s.Index),
         label: trackLabel(s, i + 1),
+        lang: s.Language ?? undefined,
       })),
       ...fileList.map(({ id, label }) => ({ id, label })),
     ],
@@ -274,7 +308,7 @@ export function useBrowserPlayer(
       const v = el();
       if (v) v.playbackRate = rate;
     },
-    setAudio: () => {},
+    setAudio: showAudio,
     setSubtitle: showSubtitle,
     setSubtitleDelay: (ms) => {
       delayMs.current = clampDelay(ms);

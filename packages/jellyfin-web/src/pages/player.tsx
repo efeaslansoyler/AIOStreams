@@ -21,6 +21,11 @@ import { currentHost } from '../lib/hosts';
 import { useFeature } from '../lib/server-info';
 import { useBrowserPlayer, usePhoneFullscreen } from '../lib/hosts/browser';
 import { useNowPlaying } from '../lib/playback/now-playing';
+import {
+  useShowPicks,
+  useShowTrackPicks,
+  withShowPick,
+} from '../lib/playback/show-tracks';
 import type {
   NativePlayerOptions,
   PlayerController,
@@ -31,12 +36,19 @@ import {
   type SubtitleStyle,
   type VideoFit,
 } from '../lib/settings';
-import { subtitleCss, subtitleScale } from '../lib/subtitles/style';
+import {
+  subtitleCss,
+  subtitleLine,
+  subtitleScale,
+} from '../lib/subtitles/style';
 import { usePlaybackPrefs, type PlaybackPrefs } from '../lib/user-config';
 import { backdropUrl } from '../lib/images';
 import { goBack, navigate, to, versionsPath } from '../lib/paths';
 import { PlayerControls } from '../components/player-controls';
-import { useNextEpisodePrompt } from '../components/next-episode';
+import {
+  countPlayedOn,
+  useNextEpisodePrompt,
+} from '../components/next-episode';
 import {
   useVersionPicker,
   VersionPickerProvider,
@@ -89,6 +101,7 @@ export function PlayerPage({
   const item = useItem(itemId);
   const info = usePlaybackInfo(itemId, { sourceId: sourceId || undefined });
   const playback = usePlaybackPrefs();
+  const picks = useShowPicks();
   usePlayerPage();
   usePhoneFullscreen(!currentHost().usePlayer);
 
@@ -105,19 +118,31 @@ export function PlayerPage({
     lastVersions.set(itemId, undefined);
     navigate(versionsPath(item.data), { replace: true });
   }, [missing, item.data, itemId]);
-  if (!playing && item.data && source && !playback.isLoading) {
+  if (
+    !playing &&
+    item.data &&
+    source &&
+    !playback.isLoading &&
+    !picks.isLoading
+  ) {
     const player = chosenPlayer();
     setPlaying({
       item: item.data,
       source,
       playSessionId: info.data?.PlaySessionId ?? null,
-      prefs: playback.prefs,
+      prefs: withShowPick(playback.prefs, picks.data, item.data),
       launched: player.kind === 'launched' ? player : undefined,
     });
   }
 
   if (!playing) {
-    if (item.isLoading || info.isLoading || playback.isLoading || missing) {
+    if (
+      item.isLoading ||
+      info.isLoading ||
+      playback.isLoading ||
+      picks.isLoading ||
+      missing
+    ) {
       return (
         <Cover item={item.data}>
           <LoadingSpinner />
@@ -157,7 +182,7 @@ function useEnded(item: BaseItemDto, close?: () => void) {
   const connect = (next: ReturnType<typeof useNextEpisodePrompt>) => {
     ended.current = () => {
       if (!next.autoplay || !next.next) return back();
-      void next.playNext().then((ok) => {
+      void next.playOn().then((ok) => {
         if (!ok) back();
       });
     };
@@ -287,6 +312,7 @@ function Failure({
             intent="gray-outline"
             className="rounded-full"
             leftIcon={<BiArrowBack />}
+            autoFocus={!onVersions}
             onClick={() => goBack(to.item(itemId))}
           >
             Back
@@ -296,6 +322,7 @@ function Failure({
               intent="white"
               className="rounded-full"
               leftIcon={<BiLayer />}
+              autoFocus
               onClick={onVersions}
             >
               Other versions
@@ -334,6 +361,41 @@ function cueCss(style: SubtitleStyle): string {
   }`;
 }
 
+/** For a player that draws no subtitles, placed and sized as the page's own video draws cues. */
+function SubtitleText({ text, style }: { text: string; style: SubtitleStyle }) {
+  const { fontWeight, color, backgroundColor, textShadow } = subtitleCss(style);
+  return (
+    <div
+      data-ui="player-subtitle"
+      className="pointer-events-none fixed inset-x-0 flex justify-center px-[5%] text-center"
+      style={{ bottom: `${100 - subtitleLine(style)}%` }}
+    >
+      <span
+        className="whitespace-pre-line px-2"
+        style={{
+          fontSize: `calc(${subtitleScale(style)} * 5vh)`,
+          fontWeight,
+          color,
+          backgroundColor,
+          textShadow,
+        }}
+      >
+        {text}
+      </span>
+    </div>
+  );
+}
+
+function useKeepAwake(player: PlayerController) {
+  const awake = player.state.started && !player.state.paused;
+  React.useEffect(() => {
+    const { keepAwake } = currentHost();
+    if (!awake || !keepAwake) return;
+    keepAwake(true);
+    return () => keepAwake(false);
+  }, [awake]);
+}
+
 function BrowserPlayer({
   item,
   source,
@@ -359,15 +421,18 @@ function BrowserPlayer({
     source,
     player,
     segments: segments.data?.Items,
+    onBack: back,
   });
   connect(next);
   const switchVersion = useSwitchVersion(item, source, player);
+  const controls = useShowTrackPicks(player, item, source);
   useReporting(player, { item, source, playSessionId });
   useNowPlaying(item, player, {
     onStop: back,
     onNext: next.next ? next.playNext : undefined,
     onPrevious: next.previous ? next.playPrevious : undefined,
   });
+  useKeepAwake(player);
 
   return (
     <div data-page="player" className="fixed inset-0 bg-black">
@@ -393,19 +458,8 @@ function BrowserPlayer({
           ) : null;
         })}
       </video>
-      <PlayerControls
-        item={item}
-        player={player}
-        segments={segments.data?.Items}
-        onBack={back}
-        offeringNext={!!next.element}
-        onVersions={switchVersion}
-        onPrevious={next.previous ? next.playPrevious : undefined}
-        onNext={next.next ? next.playNext : undefined}
-        loadingEpisode={next.loading}
-      />
-      {next.element}
-      {player.state.error && (
+      {/* A failed player's controls would only take keys and focus from it. */}
+      {player.state.error ? (
         <Failure
           itemId={item.Id!}
           item={item}
@@ -413,6 +467,23 @@ function BrowserPlayer({
           message={player.state.error}
           onVersions={switchVersion}
         />
+      ) : (
+        <>
+          {!next.asking && (
+            <PlayerControls
+              item={item}
+              player={controls}
+              segments={segments.data?.Items}
+              onBack={back}
+              offeringNext={!!next.element}
+              onVersions={switchVersion}
+              onPrevious={next.previous ? next.playPrevious : undefined}
+              onNext={next.next ? next.playNext : undefined}
+              loadingEpisode={next.loading}
+            />
+          )}
+          {next.element}
+        </>
       )}
     </div>
   );
@@ -475,10 +546,12 @@ function NativePlayer({
     startMs,
     onEnded,
     onClosed: back,
-    onAdvance: (episode) =>
-      navigate(to.play(episode.itemId, episode.sourceId, episode.startMs), {
+    onAdvance: (episode) => {
+      countPlayedOn();
+      navigate(to.play(episode.itemId, episode.source.Id!, episode.startMs), {
         replace: true,
-      }),
+      });
+    },
     prefs,
     subtitleStyle,
     launched,
@@ -494,9 +567,11 @@ function NativePlayer({
     source,
     player,
     segments,
+    onBack: back,
   });
   connect(next);
   const switchVersion = useSwitchVersion(item, source, player);
+  const controls = useShowTrackPicks(player, item, source);
   useReporting(player, { item, source, playSessionId });
   useNowPlaying(item, player, {
     onStop: back,
@@ -507,6 +582,9 @@ function NativePlayer({
   return (
     <div data-page="player" className="fixed inset-0">
       <Cover item={item} hidden={player.state.started && !launched} />
+      {player.subtitleText && (
+        <SubtitleText text={player.subtitleText} style={subtitleStyle} />
+      )}
       {launched && (
         <p
           data-ui="player-external"
@@ -515,19 +593,7 @@ function NativePlayer({
           Playing in {launched.name}
         </p>
       )}
-      <PlayerControls
-        item={item}
-        player={player}
-        segments={segments}
-        onBack={back}
-        offeringNext={!!next.element}
-        onVersions={switchVersion}
-        onPrevious={next.previous ? next.playPrevious : undefined}
-        onNext={next.next ? next.playNext : undefined}
-        loadingEpisode={next.loading}
-      />
-      {next.element}
-      {player.state.error && (
+      {player.state.error ? (
         <Failure
           itemId={item.Id!}
           item={item}
@@ -535,6 +601,23 @@ function NativePlayer({
           message={`Playback failed: ${player.state.error}`}
           onVersions={switchVersion}
         />
+      ) : (
+        <>
+          {!next.asking && (
+            <PlayerControls
+              item={item}
+              player={controls}
+              segments={segments}
+              onBack={back}
+              offeringNext={!!next.element}
+              onVersions={switchVersion}
+              onPrevious={next.previous ? next.playPrevious : undefined}
+              onNext={next.next ? next.playNext : undefined}
+              loadingEpisode={next.loading}
+            />
+          )}
+          {next.element}
+        </>
       )}
     </div>
   );

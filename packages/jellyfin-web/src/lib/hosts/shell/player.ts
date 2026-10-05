@@ -6,7 +6,8 @@ import { base64, checkSubtitleFile } from '../../subtitles/files';
 import { sameLanguage } from '../../languages';
 import { parseChapters, type Chapter } from '../../playback/chapters';
 import { settings, useSetting, type SubtitleStyle } from '../../settings';
-import type { PlaybackPrefs } from '../../user-config';
+import { ORIGINAL_LANGUAGE, type PlaybackPrefs } from '../../user-config';
+import type { SourceInfo } from '../../types';
 import {
   clampDelay,
   savedSubtitleDelay,
@@ -16,6 +17,7 @@ import { parseSubtitleLines } from '../../subtitles/cues';
 import { MPV_OUTLINE, mpvColor, subtitleScale } from '../../subtitles/style';
 import {
   initialState,
+  ownTrackLabel,
   storedVolume,
   trackLabel,
   VOLUME_KEY,
@@ -43,11 +45,6 @@ const IMAGE_SUBTITLE_CODECS = new Set([
   'dvd_subtitle',
   'dvb_subtitle',
 ]);
-
-function mpvTrackLabel(track: MpvTrack): string {
-  const parts = [track.title, track.lang?.toUpperCase()].filter(Boolean);
-  return parts.join(' · ') || `Track ${track.id}`;
-}
 
 const EXTERNAL = 'ext:';
 
@@ -206,7 +203,7 @@ export function useShellPlayer(opts: NativePlayerOptions): PlayerController {
     const load = () => {
       const options = [
         ...(startMs ? [`start=${(startMs / 1000).toFixed(3)}`] : []),
-        ...trackOptions(latest.current.prefs ?? {}),
+        ...trackOptions(latest.current.prefs ?? {}, source),
       ];
       command('loadfile', url, 'replace', -1, options.join(','));
     };
@@ -298,7 +295,7 @@ export function useShellPlayer(opts: NativePlayerOptions): PlayerController {
         const next = queued.current;
         if (!next) return;
         moved = true;
-        advanced = { itemId: next.itemId, sourceId: next.sourceId };
+        advanced = { itemId: next.itemId, sourceId: next.source.Id! };
         latest.current.onAdvance?.(next);
       } else if (m.type === 'mpv-event' && m.name === 'playback-restart')
         patch({ started: true, waiting: false });
@@ -307,7 +304,7 @@ export function useShellPlayer(opts: NativePlayerOptions): PlayerController {
       else if (m.type === 'mpv-ended' && m.reason === 'eof') {
         if (!queued.current) latest.current.onEnded();
       } else if (m.type === 'mpv-ended' && m.reason === 'error')
-        patch({ error: m.error ?? 'mpv could not play this version' });
+        patch({ error: failure(m.error, m.cause) });
       else if (m.type === 'external-ended' && external) {
         if (m.error) patch({ error: m.error });
         else latest.current.onClosed?.();
@@ -358,14 +355,15 @@ export function useShellPlayer(opts: NativePlayerOptions): PlayerController {
 
   const toTrack = (t: MpvTrack): Track => ({
     id: String(t.id),
-    label: mpvTrackLabel(t),
+    label: ownTrackLabel(t.title, t.lang, t.id),
+    lang: t.lang,
   });
   return {
     state: { ...state, subtitle: subtitleId(state.subtitle) },
     audioTracks: tracks.filter((t) => t.type === 'audio').map(toTrack),
     subtitleTracks: [
       ...tracks.filter((t) => t.type === 'sub' && !fromServer(t)).map(toTrack),
-      ...externals.map(({ id, label }) => ({ id, label })),
+      ...externals.map(({ id, label, lang }) => ({ id, label, lang })),
     ],
     togglePlay: () => set('pause', !latest.current.state.paused),
     seek: (ms) => {
@@ -436,7 +434,7 @@ export function useShellPlayer(opts: NativePlayerOptions): PlayerController {
             ...(episode.startMs
               ? [`start=${(episode.startMs / 1000).toFixed(3)}`]
               : []),
-            ...trackOptions(latest.current.prefs ?? {}),
+            ...trackOptions(latest.current.prefs ?? {}, episode.source),
           ];
           command('loadfile', episode.url, 'append', -1, options.join(','));
         }
@@ -444,14 +442,46 @@ export function useShellPlayer(opts: NativePlayerOptions): PlayerController {
   };
 }
 
+function statusMeaning(status: number): string | undefined {
+  if (status === 401 || status === 403) return 'refused';
+  if (status === 404 || status === 410) return 'not found';
+  if (status === 429) return 'too many requests';
+  return status >= 500 ? 'server error' : undefined;
+}
+
+function failure(error: string | null, cause?: string): string {
+  const status = Number(cause?.match(/^HTTP error (\d{3})/)?.[1]);
+  if (status) {
+    const meaning = statusMeaning(status);
+    return `the link answered HTTP ${status}${meaning ? ` (${meaning})` : ''}`;
+  }
+  if (cause) {
+    const text = cause.replace(/^error: /, '');
+    return text.charAt(0).toLowerCase() + text.slice(1);
+  }
+  // What a link answering with a web page fails as.
+  if (error === 'unrecognized file format')
+    return 'the link returned something other than a video';
+  return error ?? 'mpv could not play this version';
+}
+
 /**
  * The user's languages and subtitle mode as mpv's per-file track choices.
- * mpv matches a language across its two- and three-letter codes.
+ * mpv matches a language across its two- and three-letter codes. Original
+ * language takes the language of the server's default audio track, as only
+ * the server knows it; other servers may not pick that track from the
+ * user's settings, so a named language goes to mpv as it is.
  */
-function trackOptions(prefs: PlaybackPrefs): string[] {
+function trackOptions(prefs: PlaybackPrefs, source: SourceInfo): string[] {
   const options: string[] = [];
-  if (prefs.AudioLanguagePreference)
-    options.push(`alang=${prefs.AudioLanguagePreference}`);
+  const audio =
+    prefs.AudioLanguagePreference === ORIGINAL_LANGUAGE
+      ? source.MediaStreams?.find(
+          (s) =>
+            s.Type === 'Audio' && s.Index === source.DefaultAudioStreamIndex
+        )?.Language
+      : prefs.AudioLanguagePreference;
+  if (audio) options.push(`alang=${audio}`);
   const slang = prefs.SubtitleLanguagePreference
     ? [`slang=${prefs.SubtitleLanguagePreference}`]
     : [];

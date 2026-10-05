@@ -67,7 +67,11 @@ import {
   subtitleLine,
   SUBTITLE_SIZE_LABELS,
 } from '../lib/subtitles/style';
-import { usePlaybackPrefs, type SubtitleMode } from '../lib/user-config';
+import {
+  ORIGINAL_LANGUAGE,
+  usePlaybackPrefs,
+  type SubtitleMode,
+} from '../lib/user-config';
 import {
   CUSTOM_LINK,
   LAUNCHED_PLAYERS,
@@ -83,6 +87,7 @@ import {
   MAX_FEATURED,
   NEXT_COUNTDOWNS,
   NEXT_LEADS,
+  STILL_WATCHING_AFTER,
   SEEK_STEPS,
   VOLUME_STEPS,
   SEGMENT_ACTIONS,
@@ -113,6 +118,11 @@ import {
 } from '../components/settings-card';
 
 const ANY = 'any';
+const AUDIO_LANGUAGE_OPTIONS = [
+  { value: ANY, label: 'No preference' },
+  { value: ORIGINAL_LANGUAGE, label: 'Original language' },
+  ...LANGUAGES.map((l) => ({ value: l.code, label: l.name })),
+];
 const LANGUAGE_OPTIONS = [
   { value: ANY, label: 'No preference' },
   ...LANGUAGES.map((l) => ({ value: l.code, label: l.name })),
@@ -191,13 +201,20 @@ function PlaybackSection() {
   const { prefs, update } = usePlaybackPrefs();
   const [seekStep, setSeekStep] = useSetting(settings.seekStep);
   const [volumeStep, setVolumeStep] = useSetting(settings.volumeStep);
-  const [skipList, setSkipList] = useSetting(settings.skipVersionList);
+  const [autoPlay, setAutoPlay] = useSetting(settings.autoPlayFirst);
   const [nextPrompt, setNextPrompt] = useSetting(settings.next.prompt);
   const [nextLead, setNextLead] = useSetting(settings.next.lead);
   const [nextCountdown, setNextCountdown] = useSetting(settings.next.countdown);
   const [nextFallbackFirst, setNextFallbackFirst] = useSetting(
     settings.next.fallbackFirst
   );
+  const [stillWatching, setStillWatching] = useSetting(
+    settings.next.stillWatching
+  );
+  const [skipFillers, setSkipFillers] = useSetting(settings.next.skipFillers);
+  const [skipRecaps, setSkipRecaps] = useSetting(settings.next.skipRecaps);
+  const marked = useFeature('fillers');
+  const autoplay = prefs.EnableNextEpisodeAutoPlay !== false;
   const [hardwareDecoding, setHardwareDecoding] = useSetting(
     settings.desktop.hardwareDecoding
   );
@@ -212,14 +229,14 @@ function PlaybackSection() {
       <SettingsCard title="Versions" description={ON_DEVICE}>
         <Switch
           side="right"
-          label="Skip the version list"
+          label="Auto-play the first version"
           help={
-            skipList
-              ? 'Play starts the version you last watched, or the first one. Hold Play to choose instead.'
-              : 'Play lists the versions to choose from. Hold Play to start the first one instead.'
+            autoPlay
+              ? 'Play starts the first version, and resuming goes back to the version you were watching. Hold Play to choose instead.'
+              : 'Play lists the versions to choose from, but resuming goes back to the version you were watching. Hold Play to do the other: start the first version, or list them when resuming.'
           }
-          value={skipList}
-          onValueChange={setSkipList}
+          value={autoPlay}
+          onValueChange={setAutoPlay}
         />
       </SettingsCard>
       <SettingsCard
@@ -234,7 +251,7 @@ function PlaybackSection() {
               ? 'Counts down, then plays the next episode in the same kind of version. Off, the prompt waits for you.'
               : 'Counts down, then plays the next episode. Off, the prompt waits for you.'
           }
-          value={prefs.EnableNextEpisodeAutoPlay !== false}
+          value={autoplay}
           onValueChange={(v) => update({ EnableNextEpisodeAutoPlay: v })}
         />
         <Switch
@@ -291,6 +308,36 @@ function PlaybackSection() {
             }))}
             value={String(nextCountdown)}
             onValueChange={(v) => setNextCountdown(Number(v))}
+          />
+        )}
+        {marked && (
+          <Switch
+            side="right"
+            label="Skip filler episodes"
+            help="Playing on and the next and previous buttons pass over episodes marked as filler. You can still play one yourself."
+            value={skipFillers}
+            onValueChange={setSkipFillers}
+          />
+        )}
+        {marked && (
+          <Switch
+            side="right"
+            label="Skip recap episodes"
+            help="The same for episodes marked as a recap."
+            value={skipRecaps}
+            onValueChange={setSkipRecaps}
+          />
+        )}
+        {autoplay && (
+          <Select
+            label="Ask if you are still watching"
+            help="Pauses and asks before the next episode once this many have played in a row without a key, click or button press."
+            options={STILL_WATCHING_AFTER.map((n) => ({
+              value: String(n),
+              label: n ? `After ${n} episodes` : 'Never',
+            }))}
+            value={String(stillWatching)}
+            onValueChange={(v) => setStillWatching(Number(v))}
           />
         )}
       </SettingsCard>
@@ -436,12 +483,32 @@ function AudioSection() {
       <SettingsCard title="Language" description={ON_ACCOUNT}>
         <Select
           label="Audio language"
-          help="Picked when a version has it; otherwise the version's own default plays."
-          options={LANGUAGE_OPTIONS}
+          help={
+            prefs.AudioLanguagePreference === ORIGINAL_LANGUAGE
+              ? "The language the title was made in, when a version has it; otherwise the version's own default plays."
+              : "Picked when a version has it; otherwise the version's own default plays."
+          }
+          options={AUDIO_LANGUAGE_OPTIONS}
           value={prefs.AudioLanguagePreference || ANY}
           onValueChange={(v) =>
             update({ AudioLanguagePreference: v === ANY ? '' : v })
           }
+        />
+        {!!prefs.AudioLanguagePreference && (
+          <Switch
+            side="right"
+            label="Play the version's default track first"
+            help="A track the version marks as its default plays even when another is in the language above. Turn this off for the language to always win."
+            value={prefs.PlayDefaultAudioTrack !== false}
+            onValueChange={(v) => update({ PlayDefaultAudioTrack: v })}
+          />
+        )}
+        <Switch
+          side="right"
+          label="Remember picks per show"
+          help="An audio track you pick while watching a show sets the language for its other episodes. Picking the language above again forgets it."
+          value={prefs.RememberAudioSelections !== false}
+          onValueChange={(v) => update({ RememberAudioSelections: v })}
         />
       </SettingsCard>
       {currentHost().name === 'desktop' && (
@@ -533,6 +600,13 @@ function SubtitlesSection() {
           options={SUBTITLE_MODES.map(({ value, label }) => ({ value, label }))}
           value={mode}
           onValueChange={(v) => update({ SubtitleMode: v as SubtitleMode })}
+        />
+        <Switch
+          side="right"
+          label="Remember picks per show"
+          help="Subtitles you pick or turn off while watching a show stay that way for its other episodes. Picking what the settings above would show forgets it."
+          value={prefs.RememberSubtitleSelections !== false}
+          onValueChange={(v) => update({ RememberSubtitleSelections: v })}
         />
       </SettingsCard>
       <SettingsCard title="Preview">

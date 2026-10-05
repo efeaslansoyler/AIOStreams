@@ -10,6 +10,8 @@ import { jellyfinDesktopHost } from './jellyfin-desktop';
 import { nativeShellHost } from './native-shell';
 import { shellHost } from './shell';
 import type { MediaKey } from './shell/bridge';
+import { tizenHost } from './tizen';
+import { webosHost } from './webos';
 
 export interface NowPlaying {
   itemId: string;
@@ -44,6 +46,8 @@ export interface Host {
   back?(): boolean;
   /** Back from the first page leaves the app. */
   exit?(): void;
+  /** Holds off a screensaver the system starts over the page's own video. */
+  keepAwake?(on: boolean): void;
   /** The app's media controls, in place of the browser's. */
   mediaSession?: {
     update(now: NowPlaying): void;
@@ -66,6 +70,8 @@ export function currentHost(): Host {
     jellyfinDesktopHost() ??
     androidHost() ??
     nativeShellHost() ??
+    webosHost() ??
+    tizenHost() ??
     browserHost
   );
 }

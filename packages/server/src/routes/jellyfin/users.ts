@@ -1,7 +1,6 @@
 import { createHash } from 'crypto';
 import { Router, type Request } from 'express';
 import {
-  accountScope,
   config as appConfig,
   createLogger,
   encryptString,
@@ -15,6 +14,7 @@ import {
   serverId as instanceServerId,
   sessionKeyFor,
   msToTicks,
+  SUBTITLE_MODES,
   WatchSessionRepository,
   type ClientInfo,
   type JellyfinPersona,
@@ -34,6 +34,7 @@ import {
   lockTag,
   userUnlocks,
   personasOf,
+  watchScopeOf,
   qs,
   resolveConfig,
   resolvePickerAlias,
@@ -66,13 +67,11 @@ export function userConfiguration() {
   };
 }
 
-const SUBTITLE_MODES = ['Default', 'Always', 'OnlyForced', 'None', 'Smart'];
-
 /** The playback preferences a user can set and this server keeps. */
 const USER_PREFERENCES: Record<string, (value: unknown) => boolean> = {
   AudioLanguagePreference: (v) => typeof v === 'string' && v.length <= 16,
   SubtitleLanguagePreference: (v) => typeof v === 'string' && v.length <= 16,
-  SubtitleMode: (v) => typeof v === 'string' && SUBTITLE_MODES.includes(v),
+  SubtitleMode: (v) => SUBTITLE_MODES.some((mode) => mode === v),
   PlayDefaultAudioTrack: (v) => typeof v === 'boolean',
   RememberAudioSelections: (v) => typeof v === 'boolean',
   RememberSubtitleSelections: (v) => typeof v === 'boolean',
@@ -256,14 +255,10 @@ export async function authenticationResult(
   opts: { provedPassword?: boolean } = {}
 ) {
   const client = clientOf(req);
-  const scope =
-    persona && persona.history !== 'shared'
-      ? { uuid, persona: persona.id }
-      : accountScope(uuid);
   return {
     User: {
       ...userDto(uuid, userData, persona),
-      Configuration: await storedUserConfiguration(scope),
+      Configuration: await storedUserConfiguration(watchScopeOf(uuid, persona)),
     },
     SessionInfo: sessionInfo(uuid, userData, persona, client, req.userIp),
     AccessToken: mintToken({
@@ -557,9 +552,12 @@ router.get(
         : (personasOf(ctx.userData).find(
             (p) => personaUserId(ctx.uuid, p.id) === wanted
           ) ?? ctx.persona);
-    res.json(
-      userDto(ctx.uuid, ctx.userData, persona, { forKey: !!ctx.apiKey })
-    );
+    res.json({
+      ...userDto(ctx.uuid, ctx.userData, persona, { forKey: !!ctx.apiKey }),
+      Configuration: await storedUserConfiguration(
+        watchScopeOf(ctx.uuid, persona)
+      ),
+    });
   })
 );
 /* A user token only ever reads and writes its own preferences. */

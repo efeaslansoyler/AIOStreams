@@ -10,12 +10,19 @@ export type SubtitleMode =
   | 'None'
   | 'Smart';
 
+export const ORIGINAL_LANGUAGE = 'OriginalLanguage';
+
 /** The playback preferences in Jellyfin's user configuration. */
 export interface PlaybackPrefs {
+  /** A language code, or `OriginalLanguage`. */
   AudioLanguagePreference?: string | null;
+  PlayDefaultAudioTrack?: boolean;
   SubtitleLanguagePreference?: string | null;
   SubtitleMode?: SubtitleMode;
   EnableNextEpisodeAutoPlay?: boolean;
+  /** Off only when false, as in Jellyfin. */
+  RememberAudioSelections?: boolean;
+  RememberSubtitleSelections?: boolean;
 }
 
 type Configuration = NonNullable<UserDto['Configuration']>;

@@ -9,6 +9,7 @@ import type { BaseItemDto, MediaStream, SourceInfo } from '../types';
 export interface Track {
   id: string;
   label: string;
+  lang?: string;
 }
 
 export interface PlayerState {
@@ -35,6 +36,10 @@ export interface PlayerState {
 /** What some players add to what a browser's video can do. */
 export type PlayerFeature = 'audio' | 'chapters' | 'stats';
 
+/** Engines that list a file's audio tracks let the page's own video switch them. */
+export const browserFeatures: readonly PlayerFeature[] =
+  'audioTracks' in HTMLMediaElement.prototype ? ['audio'] : [];
+
 /** One set of controls over whichever player the page runs in. */
 export interface PlayerController {
   state: PlayerState;
@@ -44,7 +49,8 @@ export interface PlayerController {
   seek(ms: number): void;
   setVolume(volume: number): void;
   toggleMute(): void;
-  setRate(rate: number): void;
+  /** Missing where the player plays at one speed. */
+  setRate?: (rate: number) => void;
   setAudio(id: string): void;
   setSubtitle(id: string | null): void;
   /** Missing where the player cannot shift subtitles. */
@@ -53,7 +59,10 @@ export interface PlayerController {
   subtitleLines?: () => Promise<SubtitleLine[] | null>;
   /** Whether `subtitleLines` can read this subtitle; every one when missing. */
   canReadSubtitle?: (id: string) => boolean;
-  toggleFullscreen(): void;
+  /** The subtitle the page draws, for a player that draws none itself. */
+  subtitleText?: string;
+  /** Missing where the page always fills the screen. */
+  toggleFullscreen?: () => void;
   /** The file's chapters, where the player reads them. */
   chapters?: Chapter[];
   /** Where the player draws playback statistics over the video. */
@@ -77,7 +86,7 @@ export interface PlayerController {
 
 export interface QueuedEpisode {
   itemId: string;
-  sourceId: string;
+  source: SourceInfo;
   startMs: number;
   url: string;
 }
@@ -134,6 +143,17 @@ export function initialState(source: SourceInfo, startMs: number): PlayerState {
 
 export function trackLabel(stream: MediaStream, n: number): string {
   return stream.DisplayTitle || stream.Title || stream.Language || `Track ${n}`;
+}
+
+/** A track as the player itself lists it. */
+export function ownTrackLabel(
+  title: string | undefined,
+  lang: string | undefined,
+  n: number
+): string {
+  return (
+    [title, lang?.toUpperCase()].filter(Boolean).join(' · ') || `Track ${n}`
+  );
 }
 
 export function ofType(source: SourceInfo, type: MediaStream['Type']) {

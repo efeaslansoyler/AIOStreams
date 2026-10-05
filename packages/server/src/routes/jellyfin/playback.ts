@@ -16,6 +16,7 @@ import {
   type PlaybackMemo,
 } from '@aiostreams/core';
 import {
+  bodyField,
   bodyOf,
   contextFromCredentials,
   jfOptional,
@@ -26,10 +27,15 @@ import {
 import {
   decodeForRequest,
   mediaSourcesFrom,
+  trackPreferences,
   nothingToPlayPath,
   placeholderSources,
 } from './items.js';
-import { enrichSourceSubtitles, resolvePlayback } from './resolve.js';
+import {
+  applyProbedMediaInfo,
+  enrichSourceSubtitles,
+  resolvePlayback,
+} from './resolve.js';
 
 const logger = createLogger('jellyfin');
 const router: Router = Router({ mergeParams: true });
@@ -59,9 +65,10 @@ async function locate(
   } = {}
 ): Promise<Located | null> {
   const psid = qs(req, 'PlaySessionId');
+  const bodyMsid = bodyField(req, 'MediaSourceId');
   const rawMsid =
     qs(req, 'MediaSourceId') ??
-    (bodyOf(req).MediaSourceId as string | undefined) ??
+    (typeof bodyMsid === 'string' && bodyMsid ? bodyMsid : undefined) ??
     opts.hintMsid;
   let ctx = req.jf;
   const session =
@@ -160,6 +167,21 @@ function listingOptions(req: Request, loc: Located) {
   return { current: body.Fresh === true, force: body.Refresh === true };
 }
 
+// These clients ask for PlaybackInfo only from their player, without IsPlayback.
+const PLAY_ONLY_CLIENTS =
+  /^(jellyfin for android|swiftfin|wholphin|fladder|pelagica|blink)\b/i;
+// ARVIO's Android app sends IsPlayback while listing versions, then plays the
+// listed URL without asking again.
+const LISTING_CLIENTS = /^arvio$/i;
+
+function isPlaying(req: Request, loc: Located): boolean {
+  if (loc.requestedMsid) return true;
+  if (LISTING_CLIENTS.test(loc.ctx.client.name)) return false;
+  const flag = qs(req, 'IsPlayback') ?? bodyField(req, 'IsPlayback');
+  if (flag !== undefined) return flag === 'true' || flag === true;
+  return PLAY_ONLY_CLIENTS.test(loc.ctx.client.name);
+}
+
 function pickSource(
   memo: PlaybackMemo,
   requestedMsid?: string
@@ -204,12 +226,16 @@ async function playbackInfo(req: Request, res: Response) {
     return;
   }
   await enrichSourceSubtitles(loc.ctx, memo, loc.requestedMsid);
+  await applyProbedMediaInfo(loc.ctx, memo, loc.requestedMsid, {
+    playing: isPlaying(req, loc),
+  });
   // A version no longer listed must not lend its id to another.
   const requested = memo.sources.some((s) => s.msid === loc.requestedMsid)
     ? loc.requestedMsid
     : undefined;
   const sources = mediaSourcesFrom(req, loc.ctx, memo, {
     firstId: requested ?? loc.itemId,
+    tracks: await trackPreferences(loc.ctx),
     requestedMsid: requested,
     profile,
     hasSegments: hasSegments(loc.ctx, memo),

@@ -8,8 +8,18 @@ export const remuxdbSchema = {
     default: true,
     label: 'RemuxDB',
     description:
-      'Let users fill in missing stream details from RemuxDB. Lookups are sent from this server, so turning this off hides the setting and stops all lookups.',
+      'Let users fill in missing stream details from RemuxDB. Lookups are sent from this server, so turning this off hides the setting and stops all lookups and contributions.',
     env: 'REMUXDB_ENABLED',
+    requiresRestart: false,
+    secret: false,
+  },
+  contribute: {
+    schema: z.boolean(),
+    default: false,
+    label: 'Contribute to RemuxDB',
+    description:
+      "Send what the media info probe reads from played files to RemuxDB, unless it already has them, so other RemuxDB users get them too. Each submission names the torrent's info hash, or the indexer and the release id on it, along with the file name, the title it was played for and a random id for this instance. Needs **RemuxDB** on.",
+    env: 'REMUXDB_CONTRIBUTE',
     requiresRestart: false,
     secret: false,
   },
@@ -17,7 +27,7 @@ export const remuxdbSchema = {
     schema: urlString,
     default: 'https://remuxdb.1632022.xyz',
     label: 'RemuxDB base URL',
-    description: 'RemuxDB instance to query.',
+    description: 'The RemuxDB server to look files up on and contribute to.',
     env: 'REMUXDB_BASE_URL',
     requiresRestart: false,
     secret: false,
