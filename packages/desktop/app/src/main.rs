@@ -11,11 +11,15 @@ mod updates;
 use std::cell::RefCell;
 use std::path::{Component, Path, PathBuf};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 use aiostreams_desktop_core::bridge::{Inbound, Outbound, PROTOCOL_VERSION, origin};
+use aiostreams_desktop_core::external::{self, External};
 use aiostreams_desktop_core::player::Player;
 use aiostreams_desktop_core::{discord, now_playing};
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use updates::{Command, Updater};
 
 #[derive(Debug)]
@@ -32,6 +36,7 @@ pub enum UserEvent {
     WindowButtons(bool),
     Link(String),
     LinksReady,
+    ChoosePlayer(external::Kind),
 }
 
 /// The window edges the page resizes from; the system handles the others.
@@ -186,6 +191,8 @@ pub struct Paths {
     theme: PathBuf,
     logs: PathBuf,
     log_file: PathBuf,
+    players: PathBuf,
+    subtitles: PathBuf,
 }
 
 pub struct App {
@@ -267,11 +274,15 @@ fn main() {
     );
     let app_origin =
         origin(&start_url).unwrap_or_else(|| platform::fatal("--web: not a valid address"));
+    let subtitles = data_dir.join("subtitles");
+    let _ = std::fs::remove_dir_all(&subtitles);
     let paths = Rc::new(Paths {
         mpv: mpv_config_dir(&config_dir),
         theme: config_dir.join("theme.json"),
         logs,
         log_file,
+        players: config_dir.join("players.json"),
+        subtitles,
     });
     shell::run(App {
         args,
@@ -385,7 +396,7 @@ pub fn start_player(
     platform::load_vulkan_loader(library);
     let awake = Mutex::new(Awake::default());
     let emit = move |message: Outbound| {
-        if let Outbound::MpvProp { name, data } = &message
+        if let Outbound::MpvProp { name, data, .. } = &message
             && let Ok(mut awake) = awake.lock()
         {
             awake.update(name, data);
@@ -395,6 +406,42 @@ pub fn start_player(
     };
     Player::start(library, &defaults, &required, Arc::new(emit))
         .unwrap_or_else(|e| platform::fatal(&format!("mpv failed to start: {e}")))
+}
+
+/// `emit` is called on the player's own threads.
+pub fn start_external(paths: &Paths, emit: impl Fn(Outbound) + Send + Sync + 'static) -> External {
+    External::new(
+        paths.players.clone(),
+        Arc::new(move |message: Outbound| {
+            now_playing::observe(&message);
+            emit(message)
+        }),
+    )
+}
+
+const SUBTITLE_TYPES: &[&str] = &["srt", "vtt", "ass", "ssa", "sub", "sup"];
+const MAX_SUBTITLE_BYTES: usize = 10 << 20;
+
+/// The page never names a path for mpv to open, so the app writes the file itself.
+fn save_subtitle(dir: &Path, name: &str, data: &str) -> Result<PathBuf, String> {
+    static NEXT: AtomicU32 = AtomicU32::new(0);
+    let extension = Path::new(name)
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(str::to_ascii_lowercase)
+        .filter(|e| SUBTITLE_TYPES.contains(&e.as_str()))
+        .ok_or("not a subtitle file")?;
+    let bytes = BASE64.decode(data).map_err(|e| e.to_string())?;
+    if bytes.len() > MAX_SUBTITLE_BYTES {
+        return Err("too big".into());
+    }
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!(
+        "{}.{extension}",
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::write(&path, bytes).map_err(|e| e.to_string())?;
+    Ok(path)
 }
 
 /// Keeps the display on while a file plays.
@@ -432,29 +479,73 @@ impl Awake {
 pub fn handle(
     message: Inbound,
     player: &RefCell<Option<Player>>,
+    external: &External,
     send: &dyn Fn(UserEvent),
     paths: &Paths,
     updater: &Option<Updater>,
 ) {
+    let emit = |message: Outbound| send(UserEvent::Emit(receive_script(&message)));
     let fail = |message: String| {
         log::warn!("{message}");
-        send(UserEvent::Emit(receive_script(&Outbound::Error {
-            message,
-        })));
+        emit(Outbound::Error { message });
     };
     let player = player.borrow();
     match message {
-        Inbound::MpvCommand { args } => {
-            if let Some(Err(e)) = player.as_ref().map(|p| p.command(&args)) {
+        Inbound::MpvCommand {
+            args,
+            external: to_external,
+        } => {
+            let done = if to_external {
+                Some(external.command(&args))
+            } else {
+                player.as_ref().map(|p| p.command(&args))
+            };
+            if let Some(Err(e)) = done {
                 fail(format!("mpv command {args:?}: {e}"));
             }
         }
-        Inbound::MpvSetProp { name, value } => {
-            if let Some(Err(e)) = player.as_ref().map(|p| p.set_prop(&name, &value)) {
+        Inbound::MpvSetProp {
+            name,
+            value,
+            external: to_external,
+        } => {
+            let done = if to_external {
+                Some(external.set_prop(&name, &value))
+            } else {
+                player.as_ref().map(|p| p.set_prop(&name, &value))
+            };
+            if let Some(Err(e)) = done {
                 fail(format!("mpv set {name}={value}: {e}"));
             }
         }
-        Inbound::MpvSync => send(UserEvent::Sync),
+        Inbound::MpvSync { external: true } => external.sync(),
+        Inbound::MpvSync { external: false } => send(UserEvent::Sync),
+        Inbound::SubtitleFile {
+            name,
+            data,
+            external: to_external,
+        } => {
+            let title: String = name.chars().take(200).collect();
+            match save_subtitle(&paths.subtitles, &name, &data) {
+                Ok(path) if to_external => external.add_subtitle(&path, &title),
+                Ok(path) => {
+                    if let Some(p) = player.as_ref() {
+                        p.add_subtitle(&path, &title);
+                    }
+                }
+                Err(e) => fail(format!("subtitle file {title}: {e}")),
+            }
+        }
+        Inbound::ExternalPlayers => emit(external.players()),
+        Inbound::ExternalChoose { player } => match external::Kind::parse(&player) {
+            Some(kind) => send(UserEvent::ChoosePlayer(kind)),
+            None => log::warn!("external-choose: unknown player {player}"),
+        },
+        Inbound::ExternalOpen { player, title } => match external::Kind::parse(&player) {
+            Some(kind) => external.open(kind, title.as_deref()),
+            None => log::warn!("external-open: unknown player {player}"),
+        },
+        Inbound::ExternalClose => external.close(),
         Inbound::Fullscreen { value } => send(UserEvent::Fullscreen(value)),
         Inbound::Minimize => send(UserEvent::Minimize),
         Inbound::WindowDrag => send(UserEvent::Drag),
@@ -470,13 +561,12 @@ pub fn handle(
         Inbound::Close => send(UserEvent::Close),
         Inbound::AppInfo => {
             let (mpv, ffmpeg) = player.as_ref().map(Player::versions).unwrap_or_default();
-            let info = Outbound::AppInfo {
+            emit(Outbound::AppInfo {
                 app: env!("CARGO_PKG_VERSION"),
                 platform: platform::PLATFORM,
                 mpv,
                 ffmpeg,
-            };
-            send(UserEvent::Emit(receive_script(&info)));
+            });
         }
         Inbound::Fonts => send(UserEvent::Emit(receive_script(&Outbound::Fonts {
             families: installed_fonts(),
@@ -498,18 +588,16 @@ pub fn handle(
                 paths.log_file.display(),
                 logging::tail(&paths.log_file, 300)
             );
-            send(UserEvent::Emit(receive_script(&Outbound::Diagnostics {
-                text,
-            })));
+            emit(Outbound::Diagnostics { text });
         }
         Inbound::UpdateCheck { channel } => match updater {
             Some(updater) => updater.send(Command::Check(channel)),
-            None => send(UserEvent::Emit(receive_script(&Outbound::UpdateState {
+            None => emit(Outbound::UpdateState {
                 state: "off",
                 channel: None,
                 version: None,
                 error: None,
-            }))),
+            }),
         },
         Inbound::UpdateApply => {
             if let Some(updater) = updater {

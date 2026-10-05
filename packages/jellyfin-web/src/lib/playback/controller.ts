@@ -1,11 +1,10 @@
-import React from 'react';
-import { storage } from './storage';
-import type { JellyfinClient } from './client';
+import { storage } from '../storage';
+import type { JellyfinClient } from '../client';
 import type { Chapter } from './chapters';
-import type { SubtitleStyle } from './settings';
-import type { SubtitleLine } from './subtitle-lines';
-import type { PlaybackPrefs } from './user-config';
-import type { BaseItemDto, MediaStream, SourceInfo } from './types';
+import type { SubtitleStyle } from '../settings';
+import type { SubtitleLine } from '../subtitles/cues';
+import type { PlaybackPrefs } from '../user-config';
+import type { BaseItemDto, MediaStream, SourceInfo } from '../types';
 
 export interface Track {
   id: string;
@@ -63,6 +62,24 @@ export interface PlayerController {
     page: string | null;
     show(page: string | null): void;
   };
+  /** Loads a subtitle file from this device; `types` are the extensions it reads. */
+  subtitleFiles?: {
+    types: readonly string[];
+    add(file: File): Promise<void>;
+  };
+  /** The name of the player in its own window that these controls drive. */
+  external?: string;
+  /** Closes a player in its own window. */
+  close?: () => void;
+  /** Puts the next episode after this one in the player's own playlist. */
+  queueNext?: (episode: QueuedEpisode) => void;
+}
+
+export interface QueuedEpisode {
+  itemId: string;
+  sourceId: string;
+  startMs: number;
+  url: string;
 }
 
 export interface PlayerOptions {
@@ -78,6 +95,12 @@ export interface NativePlayerOptions extends PlayerOptions {
   client: JellyfinClient;
   item: BaseItemDto;
   url: string;
+  /** Plays in this player's own window instead. */
+  launched?: { id: string; name: string };
+  /** The user closed that window. */
+  onClosed?: () => void;
+  /** That player moved on to the episode it was given with `queueNext`. */
+  onAdvance?: (episode: QueuedEpisode) => void;
 }
 
 export const VOLUME_KEY = 'aiostreams-web-volume';
@@ -107,12 +130,6 @@ export function initialState(source: SourceInfo, startMs: number): PlayerState {
     maxVolume: 1,
     ...storedVolume(),
   };
-}
-
-export function useLatest<T>(value: T) {
-  const ref = React.useRef(value);
-  ref.current = value;
-  return ref;
 }
 
 export function trackLabel(stream: MediaStream, n: number): string {

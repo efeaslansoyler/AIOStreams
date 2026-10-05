@@ -1,6 +1,6 @@
 import React from 'react';
 import { toast } from 'sonner';
-import { BiArrowBack, BiCopy, BiLayer, BiLinkExternal } from 'react-icons/bi';
+import { BiArrowBack, BiCopy, BiLayer } from 'react-icons/bi';
 import { Button } from '@aiostreams/ui/button';
 import { LoadingSpinner } from '@aiostreams/ui/loading-spinner';
 import { copyToClipboard } from '@aiostreams/ui/utils/clipboard';
@@ -12,31 +12,26 @@ import {
   useRefreshAll,
   useSegments,
 } from '../lib/queries';
-import {
-  lastVersions,
-  playableSources,
-  usePlayExternally,
-} from '../lib/use-play';
-import {
-  directUrl,
-  externalPlayerTemplate,
-  PlaybackReporter,
-  streamUrl,
-  subtitleUrl,
-  textSubtitles,
-} from '../lib/playback';
+import { lastVersions, playableSources } from '../lib/playback/play';
+import { chosenPlayer } from '../lib/playback/player-choice';
+import { directUrl, streamUrl } from '../lib/playback/stream';
+import { PlaybackReporter } from '../lib/playback/reporter';
+import { subtitleUrl, textSubtitles } from '../lib/subtitles/tracks';
 import { currentHost } from '../lib/hosts';
 import { useFeature } from '../lib/server-info';
 import { useBrowserPlayer, usePhoneFullscreen } from '../lib/hosts/browser';
-import { useNowPlaying } from '../lib/now-playing';
-import type { NativePlayerOptions, PlayerController } from '../lib/player';
+import { useNowPlaying } from '../lib/playback/now-playing';
+import type {
+  NativePlayerOptions,
+  PlayerController,
+} from '../lib/playback/controller';
 import {
   settings,
   useSetting,
   type SubtitleStyle,
   type VideoFit,
 } from '../lib/settings';
-import { subtitleCss, subtitleScale } from '../lib/subtitle-style';
+import { subtitleCss, subtitleScale } from '../lib/subtitles/style';
 import { usePlaybackPrefs, type PlaybackPrefs } from '../lib/user-config';
 import { backdropUrl } from '../lib/images';
 import { goBack, navigate, to, versionsPath } from '../lib/paths';
@@ -46,7 +41,7 @@ import {
   useVersionPicker,
   VersionPickerProvider,
 } from '../components/version-picker';
-import { chapterSegments, guessedSegments } from '../lib/chapters';
+import { chapterSegments, guessedSegments } from '../lib/playback/chapters';
 import type { BaseItemDto, MediaSegmentDto, SourceInfo } from '../lib/types';
 
 interface PlayerProps {
@@ -55,6 +50,7 @@ interface PlayerProps {
   playSessionId: string | null;
   startMs: number;
   prefs: PlaybackPrefs;
+  launched?: NativePlayerOptions['launched'];
 }
 
 /**
@@ -110,11 +106,13 @@ export function PlayerPage({
     navigate(versionsPath(item.data), { replace: true });
   }, [missing, item.data, itemId]);
   if (!playing && item.data && source && !playback.isLoading) {
+    const player = chosenPlayer();
     setPlaying({
       item: item.data,
       source,
       playSessionId: info.data?.PlaySessionId ?? null,
       prefs: playback.prefs,
+      launched: player.kind === 'launched' ? player : undefined,
     });
   }
 
@@ -144,10 +142,16 @@ export function PlayerPage({
 
 /**
  * The end of the file plays on or goes back; a ref, since the player needs the
- * handler before the prompt that decides it exists.
+ * handler before the prompt that decides it exists. Going back closes a player
+ * in its own window, which playing on keeps.
  */
-function useEnded(item: BaseItemDto) {
-  const back = React.useCallback(() => goBack(to.item(item.Id!)), [item.Id]);
+function useEnded(item: BaseItemDto, close?: () => void) {
+  const latestClose = React.useRef(close);
+  latestClose.current = close;
+  const back = React.useCallback(() => {
+    latestClose.current?.();
+    goBack(to.item(item.Id!));
+  }, [item.Id]);
   const ended = React.useRef(back);
   const onEnded = React.useCallback(() => ended.current(), []);
   const connect = (next: ReturnType<typeof useNextEpisodePrompt>) => {
@@ -268,8 +272,6 @@ function Failure({
   onVersions?: () => void;
 }) {
   const { client } = useSession();
-  const playExternally = usePlayExternally();
-  const template = externalPlayerTemplate();
   const link = item && source ? directUrl(client, item.Id!, source) : null;
   return (
     <div
@@ -297,16 +299,6 @@ function Failure({
               onClick={onVersions}
             >
               Other versions
-            </Button>
-          )}
-          {link && template && (
-            <Button
-              intent="white"
-              className="rounded-full"
-              leftIcon={<BiLinkExternal />}
-              onClick={() => playExternally(item!, source!)}
-            >
-              Open in player
             </Button>
           )}
           {link && (
@@ -457,7 +449,8 @@ function useShownSegments(
 
 /**
  * mpv draws beneath the page, which stays transparent from the first paint;
- * a cover hides the wait for the first frame.
+ * a cover hides the wait for the first frame. A player in its own window
+ * keeps the cover behind the controls that drive it.
  */
 function NativePlayer({
   item,
@@ -465,12 +458,14 @@ function NativePlayer({
   playSessionId,
   startMs,
   prefs,
+  launched,
   usePlayer,
 }: PlayerProps & {
   usePlayer: (opts: NativePlayerOptions) => PlayerController;
 }) {
   const { client } = useSession();
-  const { back, onEnded, connect } = useEnded(item);
+  const close = React.useRef<() => void>(undefined);
+  const { back, onEnded, connect } = useEnded(item, () => close.current?.());
   const [subtitleStyle] = useSetting(settings.subtitleStyle);
   const player = usePlayer({
     client,
@@ -479,9 +474,16 @@ function NativePlayer({
     source,
     startMs,
     onEnded,
+    onClosed: back,
+    onAdvance: (episode) =>
+      navigate(to.play(episode.itemId, episode.sourceId, episode.startMs), {
+        replace: true,
+      }),
     prefs,
     subtitleStyle,
+    launched,
   });
+  close.current = player.close;
   const segments = useShownSegments(
     item,
     useSegments(item.Id!).data?.Items,
@@ -504,7 +506,15 @@ function NativePlayer({
 
   return (
     <div data-page="player" className="fixed inset-0">
-      <Cover item={item} hidden={player.state.started} />
+      <Cover item={item} hidden={player.state.started && !launched} />
+      {launched && (
+        <p
+          data-ui="player-external"
+          className="pointer-events-none fixed inset-x-0 top-1/4 text-center text-lg font-medium text-white/80"
+        >
+          Playing in {launched.name}
+        </p>
+      )}
       <PlayerControls
         item={item}
         player={player}

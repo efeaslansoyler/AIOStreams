@@ -12,6 +12,7 @@ import {
   LuRatio,
   LuStretchHorizontal,
   LuEar,
+  LuFilePlus,
   LuGauge,
   LuLayers,
   LuListOrdered,
@@ -41,14 +42,14 @@ import {
 import { LoadingSpinner } from '@aiostreams/ui/loading-spinner';
 import { cn } from '@aiostreams/ui/core/styling';
 import { clock, itemSubtitle, itemTitle, ticksToMs } from '../lib/format';
-import {
-  useLatest,
-  type PlayerController,
-  type PlayerState,
-  type Track,
-} from '../lib/player';
+import { useLatest } from '../lib/use-latest';
+import type {
+  PlayerController,
+  PlayerState,
+  Track,
+} from '../lib/playback/controller';
 import { currentHost } from '../lib/hosts';
-import { delayLabel, SUBTITLE_DELAY_STEP_MS } from '../lib/subtitle-lines';
+import { delayLabel, SUBTITLE_DELAY_STEP_MS } from '../lib/subtitles/delay';
 import {
   settings,
   useSetting,
@@ -62,10 +63,10 @@ import {
   stepSubtitleHeight,
   stepSubtitleSize,
   SUBTITLE_SIZE_LABELS,
-} from '../lib/subtitle-style';
+} from '../lib/subtitles/style';
 import { SyncByEar, SyncToLine } from './subtitle-sync';
 import { RATES, usePlayerKeys } from './player-keys';
-import { chapterAt, type Chapter } from '../lib/chapters';
+import { chapterAt, type Chapter } from '../lib/playback/chapters';
 import type { BaseItemDto, MediaSegmentDto } from '../lib/types';
 
 const IDLE_MS = 2000;
@@ -397,6 +398,7 @@ function Menu({
   value,
   onSelect,
   onOpenChange,
+  action,
   footer,
 }: {
   name: string;
@@ -406,6 +408,7 @@ function Menu({
   value: string | null;
   onSelect(id: string | null): void;
   onOpenChange(open: boolean): void;
+  action?: { name: string; label: string; icon: React.ReactNode; run(): void };
   footer?: React.ReactNode;
 }) {
   return (
@@ -441,6 +444,16 @@ function Menu({
             <span className="[overflow-wrap:anywhere]">{option.label}</span>
           </DropdownMenuItem>
         ))}
+        {action && (
+          <DropdownMenuItem
+            data-ui="player-menu-action"
+            data-name={action.name}
+            onClick={action.run}
+          >
+            {action.icon}
+            {action.label}
+          </DropdownMenuItem>
+        )}
       </div>
       {footer && <div className="-mx-2 mt-1 border-t px-2">{footer}</div>}
     </DropdownMenu>
@@ -655,6 +668,48 @@ function useBurstSeek(player: PlayerController): (deltaMs: number) => void {
   );
 }
 
+function useFileDrop(onDrop: ((file: File) => void) | undefined): boolean {
+  const [over, setOver] = React.useState(false);
+  const latest = useLatest(onDrop);
+  const enabled = !!onDrop;
+  React.useEffect(() => {
+    if (!enabled) return;
+    // Entering a child leaves its parent, so only the count says when it left the page.
+    let depth = 0;
+    const files = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files');
+    const handlers: Record<string, (e: DragEvent) => void> = {
+      dragenter: (e) => {
+        if (!files(e)) return;
+        depth++;
+        setOver(true);
+      },
+      dragleave: (e) => {
+        if (!files(e)) return;
+        depth = Math.max(0, depth - 1);
+        if (!depth) setOver(false);
+      },
+      dragover: (e) => {
+        if (files(e)) e.preventDefault();
+      },
+      drop: (e) => {
+        if (!files(e)) return;
+        e.preventDefault();
+        depth = 0;
+        setOver(false);
+        const file = e.dataTransfer?.files[0];
+        if (file) latest.current?.(file);
+      },
+    };
+    for (const [event, handler] of Object.entries(handlers))
+      window.addEventListener(event, handler as EventListener);
+    return () => {
+      for (const [event, handler] of Object.entries(handlers))
+        window.removeEventListener(event, handler as EventListener);
+    };
+  }, [enabled, latest]);
+  return over && enabled;
+}
+
 function useNotice(): [React.ReactNode, (text: string) => void] {
   const [text, setText] = React.useState<string | null>(null);
   const timer = React.useRef<ReturnType<typeof setTimeout>>(undefined);
@@ -790,7 +845,9 @@ export function PlayerControls({
     resume: boolean;
   } | null>(null);
   const [byEar, setByEar] = React.useState(false);
+  // A player in its own window is watched there, so its controls here stay.
   const visible =
+    !!player.external ||
     !idle ||
     state.paused ||
     menus > 0 ||
@@ -841,6 +898,16 @@ export function PlayerControls({
     setPicking(null);
   };
   const closeByEar = React.useCallback(() => setByEar(false), []);
+
+  const fileInput = React.useRef<HTMLInputElement>(null);
+  const addSubtitleFile = (file: File) =>
+    latest.current.subtitleFiles?.add(file).then(
+      () => showNotice(`Added ${file.name}`),
+      (e: Error) => showNotice(e.message)
+    );
+  const dragging = useFileDrop(
+    player.subtitleFiles ? addSubtitleFile : undefined
+  );
 
   const [seekStep] = useSetting(settings.seekStep);
   const burstSeek = useBurstSeek(player);
@@ -1050,6 +1117,30 @@ export function PlayerControls({
       {flash}
       {seekFlash}
       {notice}
+      {dragging && (
+        <div
+          data-ui="subtitle-drop"
+          className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-black/60 p-6"
+        >
+          <div className="rounded-2xl border-2 border-dashed border-white/40 px-10 py-8 text-center">
+            <LuCaptions className="mx-auto mb-2 text-4xl" />
+            <p className="text-lg font-semibold">Drop to add subtitles</p>
+          </div>
+        </div>
+      )}
+      {player.subtitleFiles && (
+        <input
+          ref={fileInput}
+          type="file"
+          hidden
+          accept={player.subtitleFiles.types.map((t) => `.${t}`).join(',')}
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (file) void addSubtitleFile(file);
+          }}
+        />
+      )}
       {picking && player.setSubtitleDelay && (
         <SyncToLine
           heardAtMs={picking.heardAtMs}
@@ -1143,7 +1234,7 @@ export function PlayerControls({
             {time}
           </span>
           <div className="ml-auto flex items-center sm:gap-1">
-            {player.subtitleTracks.length > 0 && (
+            {(player.subtitleTracks.length > 0 || player.subtitleFiles) && (
               <Menu
                 name="subtitles"
                 label="Subtitles"
@@ -1152,6 +1243,14 @@ export function PlayerControls({
                 value={state.subtitle}
                 onSelect={player.setSubtitle}
                 onOpenChange={onMenu}
+                action={
+                  player.subtitleFiles && {
+                    name: 'add-file',
+                    label: 'Add a file…',
+                    icon: <LuFilePlus className="flex-none" />,
+                    run: () => fileInput.current?.click(),
+                  }
+                }
                 footer={
                   state.subtitle && (
                     <>
@@ -1168,7 +1267,7 @@ export function PlayerControls({
                           }
                         />
                       )}
-                      <SubtitleStyleSteppers />
+                      {!player.external && <SubtitleStyleSteppers />}
                     </>
                   )
                 }
@@ -1222,9 +1321,8 @@ export function PlayerControls({
               onSelect={(id) => id && player.setRate(Number(id))}
               onOpenChange={onMenu}
             />
-            {(!currentHost().usePlayer || currentHost().name === 'desktop') && (
-              <FitButton />
-            )}
+            {(!currentHost().usePlayer || currentHost().name === 'desktop') &&
+              !player.external && <FitButton />}
             {player.stats && (
               <Menu
                 name="statistics"

@@ -236,7 +236,7 @@ export function useCalendar(from: Date, to: Date) {
     queryFn: () =>
       client.get<BaseItemDtoQueryResult>('/Items', {
         userId: user.Id,
-        IncludeItemTypes: 'Episode',
+        IncludeItemTypes: 'Episode,Movie',
         Recursive: true,
         MinPremiereDate: from.toISOString(),
         MaxPremiereDate: to.toISOString(),
@@ -647,6 +647,20 @@ export function useSetPlayed() {
         ? client.post(path, undefined, { userId })
         : client.delete(path, { userId });
     },
+    onSettled: refresh,
+  });
+}
+
+export function useClearResume() {
+  const { client, user } = useSession();
+  const refresh = useRefreshAll();
+  return useMutation({
+    mutationFn: (itemId: string) =>
+      client.post(
+        `/UserItems/${itemId}/UserData`,
+        { PlaybackPositionTicks: 0 },
+        { userId: user.Id }
+      ),
     onSettled: refresh,
   });
 }

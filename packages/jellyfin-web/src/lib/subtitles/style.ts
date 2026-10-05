@@ -5,7 +5,7 @@ import {
   type SubtitleOutline,
   type SubtitleSize,
   type SubtitleStyle,
-} from './settings';
+} from '../settings';
 
 export const SUBTITLE_SIZE_LABELS = Object.fromEntries(
   SUBTITLE_SIZES.map((size) => [size, `${size}%`])
