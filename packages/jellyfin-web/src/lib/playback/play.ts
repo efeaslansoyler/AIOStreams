@@ -1,5 +1,5 @@
 import { currentHost } from '../hosts';
-import { ticksToMs } from '../format';
+import { fullTitle, ticksToMs } from '../format';
 import { navigate, to } from '../paths';
 import { externalReturnUrl } from './external-return';
 import { chosenPlayer, playerLink } from './player-choice';
@@ -8,6 +8,7 @@ import { subtitleUrl, textSubtitles } from '../subtitles/tracks';
 import { useSession } from '../session';
 import { storedMap } from '../storage';
 import { usePlaybackPrefs } from '../user-config';
+import { useEpisodesAfter } from '../queries';
 import { sameLanguage } from '../languages';
 import type { BaseItemDto, PlaybackInfoResponse, SourceInfo } from '../types';
 
@@ -64,7 +65,7 @@ function useOpenLink() {
     window.location.href = playerLink(
       template,
       directUrl(client, item.Id!, source),
-      { startMs, returnUrl, filename, subtitles }
+      { startMs, title: fullTitle(item), returnUrl, filename, subtitles }
     );
     return !!returnUrl;
   };
@@ -73,6 +74,8 @@ function useOpenLink() {
 /** Plays an item on the player chosen for this device. */
 export function usePlay() {
   const openLink = useOpenLink();
+  const episodesAfter = useEpisodesAfter();
+  const { prefs } = usePlaybackPrefs();
   return async (
     item: BaseItemDto,
     opts: {
@@ -89,7 +92,16 @@ export function usePlay() {
 
     const { play } = currentHost();
     if (play) {
-      play(item, source, startMs);
+      const next =
+        prefs.EnableNextEpisodeAutoPlay !== false
+          ? await episodesAfter(item).catch(() => [])
+          : [];
+      play(
+        item,
+        source,
+        startMs,
+        next.map((e) => e.Id!)
+      );
       return;
     }
     const player = chosenPlayer();
